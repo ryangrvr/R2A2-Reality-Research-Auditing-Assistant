@@ -1,0 +1,20 @@
+# Evidence record: negative control
+
+schema_type: evidence
+evidence_id: evidence.negative_control
+evidence_type: COMPUTATIONAL_OUTPUT
+created: "2024-01-15"
+produced_by_run: run.run_001
+description: >
+  Negative control: same pipeline run with the effect-generating term disabled.
+  Confirms the observed pattern does not appear without the manipulated factor.
+artifacts:
+  - path: data/negative_control.json
+    media_type: application/json
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+quality:
+  checks:
+    - name: output_present
+      passed: true
+    - name: seed_recorded
+      passed: true

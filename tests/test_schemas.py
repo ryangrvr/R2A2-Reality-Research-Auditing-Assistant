@@ -158,6 +158,24 @@ def test_run_schema(tmp_path, run_validator):
     assert not list(run_validator.iter_errors(run))
 
 
+def test_invalid_evidence_rejected(evidence_validator):
+    bad = {
+        "id": "evidence.bad",
+        # missing type, path, produced_at
+    }
+    assert list(evidence_validator.iter_errors(bad))
+
+
+def test_invalid_run_rejected(run_validator):
+    bad = {"id": "run.bad", "command": "python run.py"}
+    assert list(run_validator.iter_errors(bad))
+
+
+def test_invalid_prereg_rejected(prereg_validator):
+    bad = {"id": "prereg.bad", "title": "t"}
+    assert list(prereg_validator.iter_errors(bad))
+
+
 def test_prereg_schema(prereg_validator):
     prereg = {
         "id": "prereg.scaling",

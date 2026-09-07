@@ -1,0 +1,19 @@
+# Evidence record: simulation output (positive result)
+
+schema_type: evidence
+evidence_id: evidence.simulation_output
+evidence_type: COMPUTATIONAL_OUTPUT
+created: "2024-01-15"
+produced_by_run: run.run_001
+description: >
+  Output of a simple numerical scaling experiment over a parameter sweep.
+artifacts:
+  - path: data/simulation_output.json
+    media_type: application/json
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+quality:
+  checks:
+    - name: output_present
+      passed: true
+    - name: seed_recorded
+      passed: true

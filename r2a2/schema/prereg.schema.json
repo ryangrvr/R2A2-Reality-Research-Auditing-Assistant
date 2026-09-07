@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rai/schema/prereg.schema.json",
+  "title": "RAI Preregistration Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "registered_at", "sha256_at_registration", "hypotheses", "analysis_plan", "exploratory"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "title": { "type": "string", "minLength": 1 },
+    "registered_at": { "type": "string", "format": "date-time" },
+    "sha256_at_registration": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "hypotheses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["statement", "confirmatory"],
+        "additionalProperties": false,
+        "properties": {
+          "statement": { "type": "string", "minLength": 1 },
+          "confirmatory": { "type": "boolean" },
+          "linked_claim_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "analysis_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "parameters"],
+      "properties": {
+        "commands": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "parameters": { "type": "object", "additionalProperties": true },
+        "thresholds": { "type": "object", "additionalProperties": true },
+        "exclusion_rules": { "type": "array", "items": { "type": "string" } },
+        "tests": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "negative": { "type": "array", "items": { "type": "string" } },
+        "positive": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "exploratory": { "type": "boolean" },
+    "frozen": { "type": "boolean" }
+  }
+}

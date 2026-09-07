@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rai/schema/evidence.schema.json",
+  "title": "RAI Evidence Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "sha256", "role", "produced_by"],
+  "properties": {
+    "path": { "type": "string" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "role": { "enum": ["PREREG", "RESULT", "TEST", "CONTROL", "SUPERSEDED", "ENVIRONMENT"] },
+    "produced_by": { "type": "string" },
+    "prereg_linked": { "type": "boolean" },
+    "supersession_reason": { "type": "string" }
+  }
+}

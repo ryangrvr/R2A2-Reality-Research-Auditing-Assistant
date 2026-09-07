@@ -1,0 +1,26 @@
+id: claim.scaling.high_frequency_v0
+statement: "Initial v0 scaling estimate using grid N=64 only."
+status: RETRACTED
+scope:
+  model: "toy-scaling-v0"
+  domain: "superseded by claim.scaling.high_frequency"
+dependencies:
+  assumptions:
+    - "claim.scaling.declared_input"
+  code:
+    - path: model.py
+evidence:
+  artifacts:
+    - path: reports/scaling_result_v0.json
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      role: SUPERSEDED
+      supersession_reason: "Single coarse grid (N=64) insufficient; grid-range study replaced it."
+supersession:
+  reason: "Single coarse grid (N=64) insufficient; grid-range study replaced it."
+  original_artifact_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  superseded_by: "claim.scaling.high_frequency"
+status_rationale: "Preserved with reason; never deleted. Superseded by claim.scaling.high_frequency."
+nonclaims:
+  - "Retracted results are retained for provenance, not evidence."
+failure_conditions:
+  - "None; record is closed."

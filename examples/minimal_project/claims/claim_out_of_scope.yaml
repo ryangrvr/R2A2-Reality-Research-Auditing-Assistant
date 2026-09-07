@@ -1,0 +1,21 @@
+id: claim.quantum.gravity
+statement: "Any statement about quantum gravity."
+status: OUT_OF_SCOPE
+scope:
+  model: "toy-scaling-v1"
+  domain: "explicitly outside the project"
+nonclaims:
+  - "This project makes no statement, positive or negative, about quantum gravity."
+dependencies:
+  assumptions: []
+  code: []
+evidence:
+  artifacts:
+    - path: "NOTES.md"
+      description: "Scope decision note"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  tests:
+    - command: "none (out of scope)"
+      result: OUT_OF_SCOPE
+failure_conditions:
+  - "None; this record exists only to mark the topic as outside scope."

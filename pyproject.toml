@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "r2a2-reality-research-auditing-assistant"
+version = "0.1.0"
+description = "RAI - Reality Research Auditing Assistant: a local-first, evidence-aware scientific claim and reproducibility auditor. Audits artifact provenance and claim records; does not certify scientific truth."
+readme = "RAI_GENERAL_CHARTER.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "jsonschema>=4.17", "PyYAML>=6"]
+
+[tool.setuptools.packages.find]
+include = ["rai*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

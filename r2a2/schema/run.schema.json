@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rai/schema/run.schema.json",
+  "title": "RAI Reproducibility Run Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "command", "git", "inputs", "outputs", "environment", "seeds", "started_at", "ended_at", "test_status", "claim_ids", "prereg_hash"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "command": { "type": "string", "minLength": 1 },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "commit"],
+      "properties": {
+        "branch": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{7,40}$" },
+        "worktree_dirty": { "type": "boolean" },
+        "untracked_paths": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["python", "platform", "packages"],
+      "properties": {
+        "python": { "type": "string" },
+        "platform": { "type": "string" },
+        "packages": { "type": "object", "additionalProperties": { "type": "string" } },
+        "container": { "type": ["string", "null"] },
+        "gpu": { "type": ["string", "null"] }
+      }
+    },
+    "seeds": { "type": "object", "additionalProperties": true },
+    "stdout": { "type": "string" },
+    "stderr": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "test_status": { "enum": ["PASS", "FAIL", "UNRESOLVED", "OUT_OF_SCOPE"] },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "result"],
+        "properties": {
+          "command": { "type": "string" },
+          "result": { "enum": ["PASS", "FAIL", "UNRESOLVED", "OUT_OF_SCOPE"] }
+        }
+      }
+    },
+    "claim_ids": { "type": "array", "items": { "type": "string" } },
+    "prereg_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "notes": { "type": "string" }
+  }
+}

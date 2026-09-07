@@ -1,0 +1,25 @@
+id: control.null.scaling
+statement: "Null control: replacing the coupling with zero must yield zero response. The control ran and behaved as expected."
+status: COMPUTED
+scope:
+  model: "toy-scaling-v1"
+  domain: "calibration control for claim.scaling.high_frequency"
+dependencies:
+  assumptions:
+    - "claim.scaling.declared_input"
+  code:
+    - path: model.py
+evidence:
+  artifacts:
+    - path: reports/null_control.json
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  tests:
+    - command: "python -m pytest tests/test_scaling.py -q -k null"
+      result: PASS
+status_rationale: "Registered null control executed and passed."
+disconfirmers:
+  - "Null control produces nonzero response (instrument invalid)."
+nonclaims:
+  - "A passing null control does not confirm the main claim."
+failure_conditions:
+  - "Null control yields nonzero response."

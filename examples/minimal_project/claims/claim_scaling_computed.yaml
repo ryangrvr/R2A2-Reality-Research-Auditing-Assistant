@@ -1,0 +1,43 @@
+id: claim.scaling.high_frequency
+statement: "Within the toy model and the declared grid range, the measured response scales as g^2 within 5 percent."
+status: COMPUTED
+scope:
+  model: "toy-scaling-v1"
+  domain: "64 <= N <= 1024"
+  approximations:
+    - "discrete grid"
+    - "linear response"
+dependencies:
+  assumptions:
+    - "claim.scaling.declared_input"
+  code:
+    - path: model.py
+  data:
+    - path: data/inputs.json
+evidence:
+  artifacts:
+    - path: reports/scaling_result.json
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  tests:
+    - command: "python -m pytest tests/test_scaling.py -q"
+      result: PASS
+prediction:
+  requested: true
+  quantitative: true
+  preregistered: true
+  not_fit_after_observation: true
+  baseline_comparison: complete
+  independently_reproducible: false
+  status: EARNED
+status_rationale: "Preregistered scaling test executed with saved artifacts and passing test."
+disconfirmers:
+  - "Independent reproduction deviates beyond tolerance."
+  - "Test fails on clean run."
+nonclaims:
+  - "Does not establish any physical law; this is a toy model."
+  - "Does not apply outside the declared grid range."
+failure_conditions:
+  - "Scaling exponent deviates beyond 5 percent tolerance."
+controls:
+  positive_controls:
+    - "control.planted_positive"

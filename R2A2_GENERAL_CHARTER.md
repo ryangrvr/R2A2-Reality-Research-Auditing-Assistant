@@ -1,0 +1,177 @@
+# RAI — Reality Research Auditing Assistant
+
+**General Charter · v0.1 (draft) · local-first · pre-implementation**
+
+## 1. Mission
+
+RAI is a local-first, evidence-aware **provenance and claim-status auditor** for research
+projects in any empirical or theoretical field. It helps researchers state, in
+machine-readable form:
+
+- what was tested,
+- what was assumed,
+- what changed and when,
+- what failed,
+- and what is still unknown.
+
+RAI audits **records**, not reality. Its only success criterion is that a project's
+claim/evidence records are structurally sound, internally consistent, and honestly
+labeled.
+
+## 2. Non-mission (explicit prohibitions)
+
+RAI does **not**:
+
+1. certify that any scientific claim is true, valid, correct, or proven;
+2. determine peer-review readiness, novelty, or significance;
+3. perform AI-based scientific judgment or literature search;
+4. access the network, submit, publish, or act on external systems;
+5. mutate source code, data, or prose without explicit human review and approval;
+6. silently rewrite scientific prose (it flags; the human decides);
+7. certify mathematical validity unless a precisely specified checker is executed and
+   its artifacts are audited;
+8. import or encode any specific scientific ontology, theory, or conclusion.
+
+## 3. Privacy / local-first policy
+
+- RAI runs entirely offline against a local directory and its Git history.
+- No telemetry, no web access, no external model calls, no account, no sync.
+- Suitable for unpublished work.
+- All artifacts live under a local `.audit/` directory or paths the user specifies.
+
+## 4. The claim graph
+
+Every audited project maintains a claim graph:
+
+```
+Claim ─ Evidence ─ Dependencies ─ Scope ─ Status ─ Failure conditions
+```
+
+- **Claim** — a precise, scoped statement with a machine-readable `id`.
+- **Evidence** — artifacts, tests, and runs that a claim points to.
+- **Dependencies** — assumptions, code, data, and environment the claim rests on.
+- **Scope** — model, domain, approximations, parameter ranges within which the claim
+  applies; everything else is `OUT_OF_SCOPE` by definition.
+- **Status** — exactly one status from the RAI vocabulary (§5).
+- **Failure conditions** — concrete, testable statements of what would disconfirm the
+  claim; a claim without disconfirmers is underspecified.
+- **Nonclaims** — explicit denials of what the claim does not establish.
+
+## 5. Status vocabulary
+
+Exactly one status per claim:
+
+| Status | Meaning |
+|---|---|
+| `DECLARED_INPUT` | Assumption, parameter, dataset, model choice, external theorem, or selection supplied to the project |
+| `COMPUTED` | Executed result with saved artifacts and reproducibility metadata |
+| `DERIVED` | Result following from declared premises via a checkable derivation or formal proof workflow |
+| `REPRODUCED` | Known result recreated under stated conditions |
+| `MODEL_CONDITIONAL` | Valid only under a named model, approximation, parameter choice, or analysis protocol |
+| `HYPOTHESIS` | Proposed but not yet demonstrated |
+| `NEGATIVE_RESULT` | Executed non-support, exclusion, or no-effect finding within scope |
+| `RETRACTED` | Prior result invalidated; preserved with a linked reason |
+| `UNRESOLVED` | Well-posed but not settled |
+| `OUT_OF_SCOPE` | Explicitly not tested or not supported by the model/artifacts |
+| `UNMAPPED` | Topic is not represented in the project evidence graph |
+
+### Audit verdicts (not claim statuses)
+
+| Verdict | Meaning |
+|---|---|
+| `PASS` | The declared artifact checks passed — never an assertion of scientific truth |
+| `FAIL` | A declared check failed or evidence is missing/broken |
+| `UNRESOLVED` | Cannot be determined from available artifacts |
+| `OUT_OF_SCOPE` | RAI deliberately does not evaluate this |
+
+## 6. Prediction as attribute, not status
+
+`PREDICTION` is an **attribute with gates**, never a casual status. A prediction is
+earned only when all gates are met:
+
+- `requested`, `quantitative`, `preregistered`, `not_fit_after_observation`,
+  `baseline_comparison`, `independently_reproducible`;
+- gate status is `EARNED` only when every gate is satisfied; otherwise `NOT_EARNED`.
+
+## 7. Required provenance for a run
+
+Every reproducibility run record requires:
+
+- run id, command;
+- Git branch, commit, dirty/untracked worktree state;
+- input and output hashes (sha256);
+- environment: Python/platform versions, package versions, container/GPU info;
+- random seeds;
+- stdout/stderr (when captured);
+- start/end timestamps;
+- test status;
+- linked claim IDs;
+- prereg hash and whether prereg files changed before or after the run.
+
+## 8. Preregistration integrity rules
+
+1. A preregistration record declares hypotheses, analysis plan (commands, parameters,
+   thresholds, exclusions, tests), and control registrations.
+2. `sha256_at_registration` pins the prereg file content at registration time.
+3. **Result artifacts are stored separately** from preregistration artifacts; a result
+   artifact must never be an input to its own preregistration.
+4. If a prereg file changed after registration, the change must be preserved with the
+   original hash and a reason; silent amendment is prohibited.
+5. `frozen: true` plus a hash mismatch yields `FAIL` for the corresponding audit.
+
+## 9. Positive and negative calibration policy
+
+- Every positive claim must have a **disconfirmation pathway**: declared failure
+  conditions and at least one negative control where feasible.
+- Every negative result receives symmetric scrutiny: RAI records whether an invalid
+  instrument, wrong domain, wrong baseline, or insufficient power could explain it —
+  a negative result is not automatically a "true null".
+- A control that has not run-and-passed cannot support any positive claim.
+
+## 10. Failure preservation & supersession
+
+- Superseded artifacts are **retained** with original hashes and an invalidation reason.
+- Supersession is recorded as a linked record (superseder → superseded), never deletion.
+- RAI flags "result overwritten without provenance" as `FAIL`.
+
+## 11. PASS vs truth
+
+`PASS` means: the declared artifact checks passed. It never means the science is true.
+A report that says "RAI PASS ⇒ claim true" violates this charter and must be flagged as
+an overclaim by the `report_firewall` audit.
+
+## 12. Plugin boundary
+
+RAI core is domain-neutral. Discipline-specific logic lives in plugins
+(`rai-physics`, `rai-statistics`, `rai-ml`, `rai-biology`, `rai-materials`,
+`rai-clinical`). Plugins may:
+
+- add scope vocabulary, audit rules, and checklists;
+- add audit modules consuming core artifacts.
+
+Plugins may **not**:
+
+- change the claim schema, status vocabulary, or charter rules;
+- upgrade statuses automatically;
+- bypass human decision points.
+
+## 13. Explicit human decision points
+
+RAI may **propose**, never decide, on:
+
+- status changes (e.g. `HYPOTHESIS` → `COMPUTED`);
+- retraction or supersession;
+- prose edits flagged by the report firewall;
+- publication of anything.
+
+## 14. First deliverable scope
+
+- `RAI_GENERAL_CHARTER.md` (this file);
+- `pyproject.toml`;
+- `rai/schema/claim.schema.json`, `rai/schema/run.schema.json`,
+  `rai/schema/prereg.schema.json`;
+- `examples/minimal_project/` — one declared input, one computed result, one negative
+  control, one retracted artifact, one unresolved claim;
+- schema-validation tests only. No CLI, database, LLM, plugins, or runner yet.
+
+*RAI audits the soundness of audit records. Truth is not a deliverable.*

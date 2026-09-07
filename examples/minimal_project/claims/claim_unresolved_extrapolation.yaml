@@ -1,0 +1,20 @@
+id: claim.extrapolation.large_grid
+statement: "The scaling behavior extends to grid sizes beyond the tested range (N > 1024)."
+status: UNRESOLVED
+scope:
+  model: "toy-scaling-v1"
+  domain: "N > 1024 — NOT tested"
+  approximations:
+    - "extrapolation only"
+dependencies:
+  assumptions:
+    - "claim.scaling.declared_input"
+evidence:
+  artifacts: []
+nonclaims:
+  - "No evidence exists for this extrapolation."
+  - "No run has been executed for N > 1024."
+failure_conditions:
+  - "Any run beyond N=1024 that deviates beyond tolerance."
+open_questions:
+  - "Does discretization error grow beyond N=1024?"

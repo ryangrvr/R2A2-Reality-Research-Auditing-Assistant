@@ -1,0 +1,22 @@
+id: claim.scaling.declared_input
+statement: "The toy model uses a declared coupling constant g = 1.0 and grid size N = 256 as supplied inputs."
+status: DECLARED_INPUT
+scope:
+  model: "toy-scaling-v1"
+  domain: "linear toy model, 0.5 <= g <= 2.0"
+  parameter_ranges:
+    g: [0.5, 2.0]
+    N: [64, 1024]
+dependencies:
+  assumptions:
+    - "Model equations as implemented in model.py"
+  code:
+    - path: model.py
+evidence:
+  artifacts:
+    - path: data/inputs.json
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+nonclaims:
+  - "Declaring an input does not validate it."
+failure_conditions:
+  - "Input file changes without a new claim record."

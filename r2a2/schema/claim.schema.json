@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rai/schema/claim.schema.json",
+  "title": "RAI Claim Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "statement", "status", "scope", "dependencies", "evidence", "nonclaims", "failure_conditions"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "statement": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": ["DECLARED_INPUT", "COMPUTED", "DERIVED", "REPRODUCED", "MODEL_CONDITIONAL", "HYPOTHESIS", "NEGATIVE_RESULT", "RETRACTED", "UNRESOLVED", "OUT_OF_SCOPE", "UNMAPPED"]
+    },
+    "scope": {
+      "type": "object",
+      "required": ["model", "domain"],
+      "additionalProperties": true,
+      "properties": {
+        "model": { "type": "string" },
+        "domain": { "type": "string" },
+        "approximations": { "type": "array", "items": { "type": "string" } },
+        "parameter_ranges": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "code": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": true,
+            "properties": { "path": { "type": "string" }, "git_commit": { "type": "string" } }
+          }
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": true,
+            "properties": { "path": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+          }
+        },
+        "claims": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifacts"],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256"],
+            "additionalProperties": true,
+            "properties": {
+              "path": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "prereg_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["command", "result"],
+            "additionalProperties": true,
+            "properties": {
+              "command": { "type": "string" },
+              "result": { "enum": ["PASS", "FAIL", "UNRESOLVED", "OUT_OF_SCOPE"] }
+            }
+          }
+        },
+        "runs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requested": { "type": "boolean" },
+        "quantitative": { "type": "boolean" },
+        "preregistered": { "type": "boolean" },
+        "not_fit_after_observation": { "enum": [true, false, "unknown"] },
+        "baseline_comparison": { "enum": ["complete", "incomplete", "none"] },
+        "independently_reproducible": { "type": "boolean" },
+        "status": { "enum": ["EARNED", "NOT_EARNED"] }
+      }
+    },
+    "status_rationale": { "type": "string" },
+    "supersession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "original_artifact_sha256", "superseded_by"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "original_artifact_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "superseded_by": { "type": "string" },
+        "decided_by": { "type": "string" }
+      }
+    },
+    "disconfirmers": { "type": "array", "items": { "type": "string" } },
+    "open_questions": { "type": "array", "items": { "type": "string" } },
+    "nonclaims": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "failure_conditions": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "controls": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "negative_controls": { "type": "array", "items": { "type": "string" } },
+        "positive_controls": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "RETRACTED" } } },
+      "then": { "required": ["supersession"] }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["DERIVED", "MODEL_CONDITIONAL", "REPRODUCED"] } } },
+      "then": {
+        "properties": { "evidence": { "required": ["artifacts", "tests"] } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "COMPUTED",
+              "DERIVED",
+              "REPRODUCED",
+              "MODEL_CONDITIONAL",
+              "NEGATIVE_RESULT"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "properties": {
+              "artifacts": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "prediction": {
+            "type": "object"
+          }
+        }, "required": ["prediction"] },
+      "then": { "properties": { "prediction": { "required": ["requested", "status"] } } }
+    }
+  ]
+}

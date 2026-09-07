@@ -1,0 +1,23 @@
+id: control.calibration.broken_v1
+statement: "Planted-positive calibration with injected signal amplitude 0.5 was expected to recover the amplitude; it did not."
+status: NEGATIVE_RESULT
+scope:
+  model: "toy-scaling-v1"
+  domain: "calibration control"
+dependencies:
+  assumptions:
+    - "claim.scaling.declared_input"
+  code:
+    - path: model.py
+evidence:
+  artifacts:
+    - path: reports/calibration_broken_v1.json
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      role: CONTROL
+status_rationale: "Executed control failed to recover the planted signal; recorded as a negative result, not hidden."
+disconfirmers:
+  - "Re-running the control recovers the planted amplitude (transient failure)."
+nonclaims:
+  - "This negative result does not by itself invalidate the main claim, but it blocks confirmation until resolved."
+failure_conditions:
+  - "Control passes after instrument fix; supersede this record with linked reason."

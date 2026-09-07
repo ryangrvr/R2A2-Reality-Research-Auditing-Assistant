@@ -11,10 +11,10 @@ try:
 except Exception:  # rpds-py native module missing/broken on this interpreter
     _JsonschemaValidator = None
 
-from rai.schema.validate import Validator as _FallbackValidator, check_schema as _fallback_check
+from r2a2.schema.validate import Validator as _FallbackValidator, check_schema as _fallback_check
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_DIR = PROJECT_ROOT / "rai" / "schema"
+SCHEMA_DIR = PROJECT_ROOT / "r2a2" / "schema"
 EXAMPLE_CLAIMS = PROJECT_ROOT / "examples" / "minimal_project" / "claims"
 
 

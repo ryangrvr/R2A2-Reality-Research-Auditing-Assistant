@@ -43,6 +43,11 @@ def claim_validator():
 
 
 @pytest.fixture(scope="module")
+def evidence_validator():
+    return make_validator(load_schema("evidence.schema.json"))
+
+
+@pytest.fixture(scope="module")
 def run_validator():
     return make_validator(load_schema("run.schema.json"))
 

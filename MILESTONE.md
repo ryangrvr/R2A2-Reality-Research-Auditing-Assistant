@@ -1,3 +1,13 @@
+## External check RULING (owner-relayed)
+
+> **`e9b3dab` — checked: Chat — NO OPEN ISSUE within the v0.4 interoperability
+> scope. v0.4 external adoption & interoperability may be BANKED.**
+
+Stopping rule honored: RO-Crate, PROV-JSON, JSON Schema are not reopened.
+Next: v0.5 ecosystem trust and supply-chain security.
+
+---
+
 # R2A2 v0.4.2 — PROV relation semantics closure
 
 ## External review of v0.4.1 (commit 49b9db6)

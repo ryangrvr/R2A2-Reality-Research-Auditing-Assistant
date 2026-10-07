@@ -1,3 +1,44 @@
+# R2A2 v0.4.2 — PROV relation semantics closure
+
+## External review of v0.4.1 (commit 49b9db6)
+
+**Verdict: `49b9db6` — checked: ChatGPT — ISSUE FOUND.** RO-Crate 1.3 and
+fail-closed JSON Schema defects materially closed. Residual PROV violations:
+list-valued relation endpoints where PROV requires separate assertions; a
+review Activity used as the Entity endpoint of `wasAttributedTo`; and
+attestation review usage referring to a hash-based result ID that is not the
+declared result Entity ID.
+
+## Closure — five acceptance conditions met
+
+1. **Exploded list endpoints.** Two review inputs produce separate `used`
+   records (one per reviewer per artifact: 4 records for 2 reviewers);
+   `n` prediction dependencies produce `n` derivation records, each with a
+   single `prov:usedEntity`; multiple authors produce separate
+   `wasAssociatedWith` records.
+2. **wasAttributedTo is entity->agent only.** Review attestations are now
+   modelled as Entities (`r2a2:attestation:<reviewer>-<n>`), attributed to
+   the reviewer agent; review *activities* connect to reviewers via
+   `wasAssociatedWith` (activity->agent). A test pins that no activity
+   appears as a `wasAttributedTo` entity endpoint.
+3. **Result ID mismatch fixed.** Result entities are keyed by experiment;
+   attestation review usage resolves the attestation's `result_hash` against
+   the declared results (`_result_entity_for`), referencing the exact
+   declared result entity. Test 5 verifies this with attestations supplied.
+4. **Checker strengthened to cardinality + endpoint types.**
+   `check_prov_conformance` now enforces: single-valued endpoints (a list
+   endpoint is an error, not tolerated), correct endpoint KIND per relation
+   (entity/activity/agent — e.g. `wasAttributedTo.prov:agent` must resolve
+   to an agent), unexpected PROV endpoints per relation type, plus the
+   existing resolution and no-embedding rules.
+
+147 passed + 1 skip. Five acceptance tests in `tests/test_prov_semantics.py`.
+
+**v0.4 — external adoption & interoperability: COMPLETE** (per the reviewer's
+stated stop rule; RO-Crate and JSON Schema not re-audited at this depth).
+
+---
+
 # R2A2 v0.4.1 — standards conformance closure
 
 ## External review of v0.4 (commit e0f2dd3)

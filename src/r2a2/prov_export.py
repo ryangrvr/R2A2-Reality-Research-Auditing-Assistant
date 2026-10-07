@@ -31,6 +31,23 @@ from .schema_json import R2A2_NS
 PROV_NS = "http://www.w3.org/ns/prov#"
 
 
+def _result_entity_for(att: dict, results: list) -> str:
+    """Resolve an attestation's result reference to the declared result Entity ID.
+
+    Result entities are keyed by EXPERIMENT (matching the runner's output), so
+    an attestation's result_hash is matched against the declared results. If
+    no match exists, the attestation still references a real declared entity
+    by falling back to the manifest it reviewed.
+    """
+    target_hash = str(att.get("result_hash", ""))
+    for rec in results:
+        if rec.get("result_hash") == target_hash:
+            return f"r2a2:result:{rec.get('experiment')}"
+    # attestation references a result not in this export: reference the
+    # reviewed manifest instead so the identifier still resolves
+    return f"r2a2:manifest:{str(att.get('manifest_hash'))[:16]}"
+
+
 def export_prov(theory_dict: Dict[str, Any],
                 manifest: Dict[str, Any],
                 results: List[Dict[str, Any]] = None,
@@ -121,6 +138,15 @@ def export_prov(theory_dict: Dict[str, Any],
     # ------------------------------------------------------------------
     # RELATION maps — the PROV-JSON required shape. Relations live here,
     # keyed by relation-instance id, NEVER inside entity/activity records.
+    #
+    # SEMANTIC RULES (v0.4.2):
+    # - every relation record has SINGLE-VALUED endpoints; multiple
+    #   relationships = multiple relation records, never arrays;
+    # - wasAttributedTo is ENTITY -> AGENT only (activities use
+    #   wasAssociatedWith); a review's attestation is modelled as an entity
+    #   so it can be attributed to the reviewer;
+    # - result entities are keyed by experiment (matching what the runner
+    #   produces), so review references resolve exactly.
     # ------------------------------------------------------------------
     used: Dict[str, Any] = {
         "r2a2:used:run-manifest": {
@@ -135,11 +161,17 @@ def export_prov(theory_dict: Dict[str, Any],
             "prov:activity": run_id,
             "prov:entity": f"r2a2:manifest:{rec.get('manifest_hash', '')[:16]}",
         }
-    for att in attestations:
-        used[f"r2a2:used:review-{att.get('reviewer')}"] = {
-            "prov:activity": f"r2a2:activity:review:{att.get('reviewer')}",
-            "prov:entity": [f"r2a2:manifest:{str(att.get('manifest_hash'))[:16]}",
-                            f"r2a2:result:{str(att.get('result_hash'))[:16]}"],
+    for i, att in enumerate(attestations):
+        reviewer = att.get('reviewer', 'reviewer')
+        # each reviewed artifact gets its OWN single-endpoint used record
+        used[f"r2a2:used:review-{reviewer}-manifest"] = {
+            "prov:activity": f"r2a2:activity:review:{reviewer}",
+            "prov:entity": f"r2a2:manifest:{str(att.get('manifest_hash'))[:16]}",
+        }
+        used[f"r2a2:used:review-{reviewer}-result"] = {
+            "prov:activity": f"r2a2:activity:review:{reviewer}",
+            # result entities are keyed by experiment; find the matching one
+            "prov:entity": _result_entity_for(att, results),
         }
 
     was_generated_by: Dict[str, Any] = {}
@@ -156,11 +188,28 @@ def export_prov(theory_dict: Dict[str, Any],
         },
     }
     for pred in theory_dict.get("predictions", []):
-        was_derived_from[f"r2a2:deriv:pred-{pred['id']}"] = {
-            "prov:generatedEntity": f"r2a2:prediction:{pred['id']}",
-            "prov:usedEntity": [f"r2a2:assumption:{a}"
-                                for a in pred.get("assumptions", [])]
-            + [f"r2a2:parameter:{p}" for p in pred.get("parameters", [])],
+        # one derivation record per dependency — never a list endpoint
+        for dep in list(pred.get("assumptions", [])):
+            was_derived_from[f"r2a2:deriv:pred-{pred['id']}-assumption-{dep}"] = {
+                "prov:generatedEntity": f"r2a2:prediction:{pred['id']}",
+                "prov:usedEntity": f"r2a2:assumption:{dep}",
+            }
+        for dep in list(pred.get("parameters", [])):
+            was_derived_from[f"r2a2:deriv:pred-{pred['id']}-parameter-{dep}"] = {
+                "prov:generatedEntity": f"r2a2:prediction:{pred['id']}",
+                "prov:usedEntity": f"r2a2:parameter:{dep}",
+            }
+
+    # wasAttributedTo is ENTITY -> AGENT. Review attestations are modelled as
+    # entities so reviewers can be attributed; activities use
+    # wasAssociatedWith instead.
+    for i, att in enumerate(attestations):
+        reviewer = att.get('reviewer', 'reviewer')
+        entity[f"r2a2:attestation:{reviewer}-{i}"] = {
+            "prov:type": ["prov:Entity", f"{R2A2_NS}ReviewAttestation"],
+            "r2a2:scope": att.get("scope"),
+            "r2a2:verdict": att.get("verdict"),
+            "r2a2:seal": att.get("seal"),
         }
 
     was_attributed_to: Dict[str, Any] = {}
@@ -168,17 +217,26 @@ def export_prov(theory_dict: Dict[str, Any],
         was_attributed_to[f"r2a2:attr:theory-{name}"] = {
             "prov:entity": theory_id, "prov:agent": f"r2a2:agent:{name}",
         }
-    for att in attestations:
-        was_attributed_to[f"r2a2:attr:review-{att.get('reviewer')}"] = {
-            "prov:entity": f"r2a2:activity:review:{att.get('reviewer')}",
-            "prov:agent": f"r2a2:agent:{att.get('reviewer')}",
+    for i, att in enumerate(attestations):
+        reviewer = att.get('reviewer', 'reviewer')
+        was_attributed_to[f"r2a2:attr:attestation-{reviewer}-{i}"] = {
+            # entity -> agent: the ATTESTATION ENTITY is attributed
+            "prov:entity": f"r2a2:attestation:{reviewer}-{i}",
+            "prov:agent": f"r2a2:agent:{reviewer}",
         }
 
-    was_associated_with: Dict[str, Any] = {
-        "r2a2:assoc:run": {"prov:activity": run_id,
-                           "prov:agent": [f"r2a2:agent:{a}" for a in authors]
-                           or None},
-    }
+    # wasAssociatedWith: ACTIVITY -> AGENT, one record per pair
+    was_associated_with: Dict[str, Any] = {}
+    for name in authors:
+        was_associated_with[f"r2a2:assoc:run-{name}"] = {
+            "prov:activity": run_id, "prov:agent": f"r2a2:agent:{name}",
+        }
+    for att in attestations:
+        reviewer = att.get('reviewer', 'reviewer')
+        was_associated_with[f"r2a2:assoc:review-{reviewer}"] = {
+            "prov:activity": f"r2a2:activity:review:{reviewer}",
+            "prov:agent": f"r2a2:agent:{reviewer}",
+        }
 
     doc: Dict[str, Any] = {
         "prefix": {"prov": PROV_NS, "r2a2": R2A2_NS},
@@ -209,16 +267,18 @@ def export_prov(theory_dict: Dict[str, Any],
 def check_prov_conformance(doc: dict) -> List[str]:
     """Structural PROV-JSON conformance check. Returns violations.
 
-    Enforces: prefix map exists; relations live in TOP-LEVEL relation maps;
-    entity/activity records do NOT embed relation keys; every relation
-    references declared ids.
+    Enforces (v0.4.2): prefix map exists; relations live in TOP-LEVEL relation
+    maps; entity/activity records do NOT embed relation keys; every relation
+    has SINGLE-VALUED endpoints of the CORRECT TYPE (entity/activity/agent)
+    that resolve to declared ids.
     """
     errors: List[str] = []
     if "prefix" not in doc:
         errors.append("PROV-JSON requires a prefix map")
     entity = doc.get("entity", {})
     activity = doc.get("activity", {})
-    known = set(entity) | set(activity) | set(doc.get("agent", {}))
+    agents = doc.get("agent", {})
+    known = set(entity) | set(activity) | set(agents)
 
     # relations must NOT be embedded inside entity/activity records
     relation_keys = {"prov:used", "prov:generated", "prov:activity",
@@ -232,25 +292,67 @@ def check_prov_conformance(doc: dict) -> List[str]:
                     f"{kind} {rid!r} embeds relation key(s) {sorted(embedded)}; "
                     "PROV-JSON requires relations in top-level relation maps")
 
-    # required relation maps must exist as top-level maps
-    for relmap in ("used", "wasGeneratedBy", "wasDerivedFrom"):
-        if relmap not in doc:
-            errors.append(f"missing top-level relation map {relmap!r}")
+    # ---- single-valued endpoints + endpoint TYPE + resolution -------------
+    # (relmap, endpoint key, required endpoint kind)
+    SPEC = {
+        "used": {"prov:activity": "activity", "prov:entity": "entity"},
+        "wasGeneratedBy": {"prov:entity": "entity", "prov:activity": "activity"},
+        "wasDerivedFrom": {"prov:generatedEntity": "entity",
+                           "prov:usedEntity": "entity"},
+        "wasAttributedTo": {"prov:entity": "entity", "prov:agent": "agent"},
+        "wasAssociatedWith": {"prov:activity": "activity", "prov:agent": "agent"},
+    }
+    kind_of = {}
+    for eid in entity:
+        kind_of[eid] = "entity"
+    for aid in activity:
+        kind_of[aid] = "activity"
+    for gid in agents:
+        kind_of[gid] = "agent"
 
-    # relation references must resolve
-    for relmap in ("used", "wasGeneratedBy", "wasDerivedFrom",
-                   "wasAttributedTo", "wasAssociatedWith"):
-        for rid, rec in doc.get(relmap, {}).items():
+    for relmap, endpoints in SPEC.items():
+        records = doc.get(relmap)
+        if records is None and relmap in ("wasAttributedTo", "wasAssociatedWith"):
+            continue  # optional maps
+        if not isinstance(records, dict):
+            errors.append(f"{relmap}: must be a top-level relation map")
+            continue
+        for rid, rec in records.items():
             if not isinstance(rec, dict):
                 errors.append(f"{relmap}/{rid}: relation value must be an object")
                 continue
-            for k, v in rec.items():
-                refs = v if isinstance(v, list) else [v]
-                for r in refs:
-                    if isinstance(r, str) and r.startswith("r2a2:"):
-                        # r2a2: references must resolve within this document
-                        if r not in known:
-                            errors.append(
-                                f"{relmap}/{rid}: reference {r!r} does not "
-                                "resolve to a declared id")
+            for endpoint, expected_kind in endpoints.items():
+                if endpoint not in rec:
+                    errors.append(f"{relmap}/{rid}: missing endpoint {endpoint}")
+                    continue
+                value = rec[endpoint]
+                # CARDINALITY: endpoints must be single-valued strings
+                if isinstance(value, list):
+                    errors.append(
+                        f"{relmap}/{rid}: {endpoint} is a LIST; PROV requires "
+                        "separate relation records, one per assertion")
+                    continue
+                if not isinstance(value, str):
+                    errors.append(
+                        f"{relmap}/{rid}: {endpoint} must be an identifier "
+                        f"string, got {type(value).__name__}")
+                    continue
+                # ENDPOINT TYPE: the referenced id must be of the right kind
+                if value in kind_of and kind_of[value] != expected_kind:
+                    errors.append(
+                        f"{relmap}/{rid}: {endpoint} references {value!r} which "
+                        f"is a {kind_of[value]}, but {relmap} requires a "
+                        f"{expected_kind}")
+                # RESOLUTION
+                if value.startswith("r2a2:") and value not in known:
+                    errors.append(
+                        f"{relmap}/{rid}: reference {value!r} does not resolve "
+                        "to a declared id")
+            # unknown endpoint keys are suspicious
+            for k in rec:
+                if k not in endpoints and k.startswith("prov:"):
+                    errors.append(
+                        f"{relmap}/{rid}: unexpected PROV endpoint {k!r} for "
+                        f"{relmap}")
+
     return errors

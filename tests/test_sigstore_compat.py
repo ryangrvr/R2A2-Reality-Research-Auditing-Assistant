@@ -53,12 +53,10 @@ def test_real_signer_signs_and_produces_canonical_bundle(tmp_path, monkeypatch):
     token mocked): produces a real Bundle whose to_json() is canonical."""
     from sigstore import sign as _ssign
     from sigstore._internal.trust import ClientTrustConfig
-    from sigstore.oidc import Issuer
 
-    trust = ClientTrustConfig.staging()  # staging: no network needed for config
-    monkeypatch.setattr(Issuer, "identity_token",
-                        lambda self, *a, **k: _FakeIdentityToken(), raising=True)
-    issuer = Issuer(trust.signing_config.get_oidc_url())
+    # ClientTrustConfig fetches from the TUF repository (network, no OIDC);
+    # the OIDC token itself is supplied directly — no Issuer object needed.
+    trust = ClientTrustConfig.staging()
     context = _ssign.SigningContext.from_trust_config(trust)
     with context.signer(identity_token=_FakeIdentityToken()) as signer:
         payload = b"r2a2 compatibility payload"
@@ -73,11 +71,8 @@ def test_real_bundle_roundtrip_and_verify_path(tmp_path, monkeypatch):
     identity policy fails AT the verifier."""
     from sigstore import sign as _ssign, verify as _sverify
     from sigstore._internal.trust import ClientTrustConfig
-    from sigstore.oidc import Issuer
 
     trust = ClientTrustConfig.staging()
-    monkeypatch.setattr(Issuer, "identity_token",
-                        lambda self, *a, **k: _FakeIdentityToken(), raising=True)
     payload = b"r2a2 compatibility payload"
     with _ssign.SigningContext.from_trust_config(trust).signer(
             identity_token=_FakeIdentityToken()) as signer:
@@ -104,12 +99,9 @@ def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
     reconstructs a real Bundle and a real Identity policy."""
     from sigstore import sign as _ssign, verify as _sverify
     from sigstore._internal.trust import ClientTrustConfig
-    from sigstore.oidc import Issuer
     from r2a2.signing import _sigstore_transport
 
     trust = ClientTrustConfig.staging()
-    monkeypatch.setattr(Issuer, "identity_token",
-                        lambda self, *a, **k: _FakeIdentityToken(), raising=True)
     payload = b"adapter transport payload"
     with _ssign.SigningContext.from_trust_config(trust).signer(
             identity_token=_FakeIdentityToken()) as signer:

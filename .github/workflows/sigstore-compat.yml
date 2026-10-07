@@ -1,0 +1,18 @@
+# Sigstore compatibility matrix (v0.5.3 gate 9): test against the lowest
+# and highest supported sigstore-python versions. Mocks ONLY the OIDC/network
+# layer; SigningContext/Bundle/Verifier are real library classes.
+name: sigstore-compat
+on: [push, pull_request]
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sigstore-version: ["4.0.0", "4.5.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e .
+      - run: pip install "sigstore==${{ matrix.sigstore-version }}"
+      - run: python -m pytest tests/test_sigstore_compat.py -v

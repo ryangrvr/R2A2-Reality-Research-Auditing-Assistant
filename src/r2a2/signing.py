@@ -186,20 +186,25 @@ def _sigstore_sign(envelope: dict, digest: str) -> dict:
     Signer.sign was removed in 3.0. Requires network + OIDC; never faked.
     """
     try:
-        from sigstore.oidc import Issuer, IdentityToken
-        from sigstore.sign import SigningContext
-        from sigstore.dsse import Envelope  # noqa: F401  (type reference)
+        from sigstore.oidc import Issuer, IdentityToken  # type: ignore
+        from sigstore import sign as _ssign  # type: ignore
+        from sigstore._internal.trust import ClientTrustConfig  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            f"sigstore backend requires an up-to-date 'sigstore' client ({exc}); "
+            f"sigstore backend requires an up-to-date 'sigstore' client (>=4.x) ({exc}); "
             "no silent downgrade to an unauthenticated mode is permitted")
     try:
-        issuer = Issuer.production()
+        # sigstore-python 4.x: production trust config is the entry point;
+        # Issuer.production()/SigningContext.production() were removed in 4.0
+        trust = ClientTrustConfig.production()
+        issuer = Issuer(trust.signing_config.get_oidc_url())
+        context = _ssign.SigningContext.from_trust_config(trust)
         identity_token = issuer.identity_token()   # interactive/OIDC flow
-        ctx = SigningContext.production()
-        with ctx.signer(identity_token=identity_token) as signer:
-            result = signer.sign_artifact(input_=digest.encode())
-        envelope["signature"] = result.to_base64()
+        with context.signer(identity_token=identity_token) as signer:
+            bundle = signer.sign_artifact(input_=digest.encode())
+        # canonical Sigstore JSON bundle (proto3 JSON wire format), not ad-hoc base64
+        envelope["signature"] = bundle.to_json()
+        envelope["signature_format"] = "sigstore-bundle-json"
         envelope["payload_digest"] = digest
         envelope["identity"] = identity_token.identity
         envelope["issuer"] = identity_token.issuer

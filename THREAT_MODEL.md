@@ -46,7 +46,7 @@ about certifying scientific correctness.
 | Unfrozen manifest executed | refused (protocol failure) |
 | Valid signature, untrusted identity | reported IDENTITY NOT TRUSTED BY POLICY — never PASS |
 | Tampered signed attestation | signature verification fails |
-| Malicious isolated plugin reading undeclared files | capability check refuses; runner errors |
+| Malicious subprocess plugin reading undeclared files via the runner protocol | runner-mediated undeclared path access is refused before launch; direct OS-level `open()`/socket access is NOT intercepted (see limitations below) |
 | Release artifact not matching provenance | digest_match false; trusted = false |
 | Provenance claims wrong source revision | source_revision is a separate reported facet |
 

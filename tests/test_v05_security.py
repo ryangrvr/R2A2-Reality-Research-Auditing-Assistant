@@ -41,13 +41,22 @@ import r2a2.signing as _signing
 
 
 class _MockSigstoreVerifier:
-    """Exercises the SAME verification code path as the real Sigstore client
-    via the mock transport (gate 3 of v0.5.1)."""
-    def __init__(self, accept=True):
+    """Exercises the SAME verification code path as the real Sigstore client,
+    INCLUDING identity+issuer binding (the mock identity policy must match
+    what the bundle represents)."""
+    def __init__(self, accept=True, cert_identity=None, cert_issuer=None):
         self.accept = accept
-    def verify(self, input_=None, bundle=None, **kw):
+        self.cert_identity = cert_identity   # identity the BUNDLE represents
+        self.cert_issuer = cert_issuer
+    def verify(self, input_=None, bundle=None, policy=None, **kw):
         if not self.accept:
             raise ValueError("bad signature")
+        # the client enforces: bundle identity == policy identity, issuer match
+        if policy is not None and self.cert_identity is not None:
+            if policy.identity != self.cert_identity or \
+                    policy.issuer != self.cert_issuer:
+                raise ValueError(
+                    "certificate identity does not match expected policy")
         return True
 
 
@@ -73,14 +82,30 @@ def _mock_sigstore_transport(monkeypatch):
     """Install a mock verifier for the sigstore transport so the suite
     exercises Sigstore verification SEMANTICS. The real-OIDC integration test
     is separate and explicitly skipped when live OIDC is unavailable."""
+    class _MockIdentityPolicy:
+        """Mimics sigstore's Identity policy: binds the verified identity to
+        the EXPECTED identity+issuer. This is the same semantic contract as
+        the real sigstore client: the bundle must be signed by exactly this
+        identity from this issuer."""
+        def __init__(self, identity, issuer):
+            self.identity = identity
+            self.issuer = issuer
+
     real = _signing._sigstore_transport
     def mock_transport(envelope, digest):
         secret = os.environ.get("R2A2_DEV_SIGNING_SECRET", "test-secret")
         expected = base64.b64encode(hmac.new(
             secret.encode(), digest.encode(), hashlib.sha256).digest()).decode()
         accept = envelope.get("signature") == expected
-        return (lambda: _MockSigstoreVerifier(accept),
-                b"mock-bundle", None, envelope.get("issuer"))
+        # the mock "certificate" carries the identity the bundle was made
+        # with; tests can override via _MOCK_CERT_IDENTITY/_MOCK_CERT_ISSUER
+        # to simulate identity/issuer mismatch
+        cert_id = os.environ.get("_MOCK_CERT_IDENTITY", envelope.get("identity", ""))
+        cert_iss = os.environ.get("_MOCK_CERT_ISSUER", envelope.get("issuer", ""))
+        return (lambda: _MockSigstoreVerifier(accept, cert_id, cert_iss),
+                _MockIdentityPolicy(envelope.get("identity", ""),
+                                    envelope.get("issuer", "")),
+                b"mock-bundle")
     monkeypatch.setattr(_signing, "_sigstore_transport", mock_transport)
     yield
 
@@ -531,3 +556,58 @@ def test_gate6_hostile_direct_access_documented(tmp_path):
     # with no args at all the plugin runs and demonstrates nothing was
     # intercepted — containment requires an OS/container sandbox
     assert "note" not in res2 or "containment" not in str(res2)
+
+
+# ===========================================================================
+# v0.5.2 — real Sigstore identity-binding closure
+# ===========================================================================
+
+def test_gate5_v052_identity_mismatch_fails_at_sigstore_layer(monkeypatch):
+    """Bundle signed by identity A + envelope claiming identity B =>
+    verification fails AT THE SIGSTORE LAYER (the client enforces cert SAN
+    vs expected identity)."""
+    att = _make_attestation()
+    env = _mock_sigstore_sign({"kind": "r2a2.review-attestation",
+                               "attestation": att},
+                              identity="alice@example.org",
+                              issuer="https://github.com/login/oauth")
+    # simulate: the actual certificate carries a DIFFERENT identity
+    monkeypatch.setenv("_MOCK_CERT_IDENTITY", "mallory@evil.example")
+    policy = IdentityPolicy(exact=["alice@example.org"],
+                            issuers=["https://github.com/login/oauth"])
+    res = verify_envelope(env, policy)
+    # fails at the sigstore verification layer (not merely R2A2 policy after)
+    assert res["content"] == SIGNATURE_INVALID
+    assert res["trusted"] is False
+
+
+def test_gate6_v052_wrong_issuer_fails_at_sigstore_layer(monkeypatch):
+    """Correct identity + wrong issuer => fails at the Sigstore verification
+    layer, not only afterward in R2A2 policy."""
+    att = _make_attestation()
+    env = _mock_sigstore_sign({"kind": "r2a2.review-attestation",
+                               "attestation": att},
+                              identity="alice@example.org",
+                              issuer="https://github.com/login/oauth")
+    monkeypatch.setenv("_MOCK_CERT_ISSUER", "https://evil.example")
+    policy = IdentityPolicy(exact=["alice@example.org"],
+                            issuers=["https://github.com/login/oauth"])
+    res = verify_envelope(env, policy)
+    assert res["content"] == SIGNATURE_INVALID
+    assert res["trusted"] is False
+
+
+def test_gate4_v052_missing_issuer_fails_closed(monkeypatch):
+    """No issuer constraint on the envelope => fail closed, even if the
+    signature itself would verify."""
+    att = _make_attestation()
+    env = _mock_sigstore_sign({"kind": "r2a2.review-attestation",
+                               "attestation": att},
+                              identity="alice@example.org",
+                              issuer="https://github.com/login/oauth")
+    env["issuer"] = None
+    policy = IdentityPolicy(exact=["alice@example.org"])
+    res = verify_envelope(env, policy)
+    assert res["content"] == SIGNATURE_INVALID
+    assert res["identity"] == IDENTITY_NOT_TRUSTED
+    assert res["trusted"] is False

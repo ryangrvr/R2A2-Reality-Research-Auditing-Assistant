@@ -179,24 +179,32 @@ def sign_payload(payload: dict, signer_backend: str = None,
     raise ValueError(f"unknown signer backend {backend!r}")
 
 
-def _sigstore_sign(envelope: dict, digest: str) -> dict:  # pragma: no cover
-    """Sigstore keyless signing. Requires network + OIDC; never faked."""
+def _sigstore_sign(envelope: dict, digest: str) -> dict:
+    """Sigstore keyless signing using the CURRENT sig-python API.
+
+    Modern sigstore-python (>= 3.0) uses SigningContext + sign_artifact;
+    Signer.sign was removed in 3.0. Requires network + OIDC; never faked.
+    """
     try:
-        from sigstore.sign import Signer
-        from sigstore.oidc import Issuer
+        from sigstore.oidc import Issuer, IdentityToken
+        from sigstore.sign import SigningContext
+        from sigstore.dsse import Envelope  # noqa: F401  (type reference)
+    except ImportError as exc:
+        raise RuntimeError(
+            f"sigstore backend requires an up-to-date 'sigstore' client ({exc}); "
+            "no silent downgrade to an unauthenticated mode is permitted")
+    try:
         issuer = Issuer.production()
-        identity_token = issuer.identity_token()
-        signer = Signer.explicit()
-        # sigstore signs arbitrary bytes; we sign the payload digest
-        import base64
-        result = signer.sign(input_=digest.encode())
-        bundle_b64 = getattr(result, "b64_bundle", None) or \
-            base64.b64encode(result.bundle).decode()
-        envelope["signature"] = bundle_b64
+        identity_token = issuer.identity_token()   # interactive/OIDC flow
+        ctx = SigningContext.production()
+        with ctx.signer(identity_token=identity_token) as signer:
+            result = signer.sign_artifact(input_=digest.encode())
+        envelope["signature"] = result.to_base64()
         envelope["payload_digest"] = digest
         envelope["identity"] = identity_token.identity
+        envelope["issuer"] = identity_token.issuer
         return envelope
-    except Exception as exc:  # pragma: no cover - network/OIDC dependent
+    except Exception as exc:
         raise RuntimeError(
             f"sigstore signing failed: {exc}. R2A2 does not silently "
             "downgrade to an unauthenticated mode.") from exc
@@ -261,6 +269,24 @@ def verify_envelope(envelope: dict, policy: IdentityPolicy) -> Dict[str, Any]:
                     "note": "integrity != authentication != authorization "
                             "!= isolation.",
                 })
+            except SigstoreVerificationError as exc:
+                # fail-closed configuration refusal (e.g. missing issuer
+                # constraint): authentication cannot be performed safely
+                return stamp({
+                    "content": SIGNATURE_INVALID,
+                    "identity": IDENTITY_NOT_TRUSTED,
+                    "trusted": False,
+                    "authenticated": False,
+                    "signer_backend": backend,
+                    "identity_claim": envelope.get("identity"),
+                    "error": str(exc),
+                    "note": "fail-closed: cannot authenticate identity without "
+                            "complete identity+issuer constraints",
+                })
+            # the Sigstore client has enforced the certificate SAN and OIDC
+            # issuer against the expected values, so the verified identity is
+            # the envelope's bound identity — proven by the bundle, not merely
+            # self-asserted by R2A2.
             identity_v = policy.check(envelope.get("identity"),
                                       envelope.get("issuer"), backend)
 
@@ -290,31 +316,67 @@ def verify_envelope(envelope: dict, policy: IdentityPolicy) -> Dict[str, Any]:
 
 
 def _sigstore_verify(envelope: dict, digest: str) -> str:
-    """Verify via the sigstore client. The transport is looked up through
-    `_sigstore_transport()` so tests can exercise the SAME verification
-    semantics with a mock bundle/verifier. In production this uses the real
-    sigstore package + network + Rekor transparency log."""
+    """Verify via the sigstore client WITH IDENTITY BINDING.
+
+    v0.5.2 semantics: the verified identity is extracted FROM THE BUNDLE
+    (the certificate's SAN), not taken from the R2A2 envelope. The Sigstore
+    verifier is invoked with the expected certificate identity AND OIDC
+    issuer so a signature from any other identity/issuer fails HERE — at the
+    cryptographic-verification layer, not merely in R2A2 policy afterward.
+
+    Fail-closed rule: an envelope without an expected issuer cannot pass
+    authenticated Sigstore verification unless the policy explicitly trusts
+    all issuers.
+
+    The transport is looked up through `_sigstore_transport()` so tests can
+    exercise the SAME verification semantics with a mock bundle/verifier."""
+    expected_identity = envelope.get("identity", "")
+    expected_issuer = envelope.get("issuer", "")
+    if not expected_issuer:
+        # fail closed: no issuer constraint => cannot authenticate identity
+        raise SigstoreVerificationError(
+            "no OIDC issuer constraint on the envelope; refusing identity "
+            "authentication without one (fail closed)")
     try:
-        verifier_factory, bundle_bytes, identity, issuer = _sigstore_transport(
+        verifier_factory, policy_obj, bundle_bytes = _sigstore_transport(
             envelope, digest)
         verifier = verifier_factory()
-        verifier.verify(input_=digest.encode(), bundle=bundle_bytes,
-                        policy=identity) if False else None
-        # the mock/real verifier exposes verify(input, bundle, policy)
-        verifier.verify(input_=digest.encode(), bundle=bundle_bytes)
+        verifier.verify(input_=digest.encode(),
+                        bundle=bundle_bytes,
+                        policy=policy_obj)   # <- identity+issuer binding
         return CONTENT_VALID
+    except SigstoreVerificationError:
+        raise
     except ImportError:
         raise
     except Exception:
         return SIGNATURE_INVALID
 
 
+class SigstoreVerificationError(RuntimeError):
+    """Raised when Sigstore identity authentication cannot be performed
+    safely (missing constraints, missing client, misconfigured transport).
+    Distinct from SIGNATURE_INVALID: this is a fail-closed configuration
+    refusal, not a bad signature."""
+
+
 def _sigstore_transport(envelope: dict, digest: str):
-    """Locate the Sigstore verification machinery. Tests may monkeypatch this
-    to supply a mock verifier exercising the same code path."""
+    """Locate the Sigstore verification machinery.
+
+    Production: builds a sigstore Identity policy bound to the EXPECTED
+    certificate identity and OIDC issuer (from the envelope), so the client
+    itself enforces that the bundle was signed by exactly that identity from
+    that issuer. Returns (verifier_factory, identity_policy, bundle).
+
+    Tests may monkeypatch this to supply a mock verifier exercising the same
+    code path — including a mocked certificate identity, so the
+    identity-A-signed/envelope-claims-B case fails here.
+    """
     import base64
     from sigstore.verify import Verifier, policy as spolicy  # type: ignore
     bundle = base64.b64decode(envelope["signature"])
+    # identity+issuer binding: the CLIENT enforces the certificate SAN and
+    # OIDC issuer against these expected values
     ident = spolicy.Identity(identity=envelope.get("identity", ""),
                              issuer=envelope.get("issuer", ""))
-    return Verifier.production, bundle, ident, envelope.get("issuer")
+    return Verifier.production, ident, bundle

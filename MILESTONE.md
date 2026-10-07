@@ -1,3 +1,14 @@
+## External check RULING (owner-relayed, 2026-10-07)
+
+> **`336ce58` — checked: ChatGPT — NO OPEN ISSUE within the v0.3 trust scope.
+> v0.3 trust/reproducibility boundary may be BANKED.**
+
+The six v0.3.3 conditions were verified as implemented as specified. Stopping
+rule honored: no further v0.3-depth digging. Next: v0.4 external adoption and
+standards interoperability.
+
+---
+
 # R2A2 v0.3.3 — execution enforcement closure
 
 ## External review of v0.3.2 (commit 0aba55c)

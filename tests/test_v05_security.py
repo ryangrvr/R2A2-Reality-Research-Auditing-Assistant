@@ -48,7 +48,7 @@ class _MockSigstoreVerifier:
         self.accept = accept
         self.cert_identity = cert_identity   # identity the BUNDLE represents
         self.cert_issuer = cert_issuer
-    def verify(self, input_=None, bundle=None, policy=None, **kw):
+    def verify_artifact(self, input_=None, bundle=None, policy=None, **kw):
         if not self.accept:
             raise ValueError("bad signature")
         # the client enforces: bundle identity == policy identity, issuer match
@@ -92,20 +92,21 @@ def _mock_sigstore_transport(monkeypatch):
             self.issuer = issuer
 
     real = _signing._sigstore_transport
+    class _MockBundle:
+        """Stands in for a real sigstore Bundle: the verifier receives a
+        bundle OBJECT (4.x lifecycle), not raw bytes."""
+        pass
     def mock_transport(envelope, digest):
         secret = os.environ.get("R2A2_DEV_SIGNING_SECRET", "test-secret")
         expected = base64.b64encode(hmac.new(
             secret.encode(), digest.encode(), hashlib.sha256).digest()).decode()
         accept = envelope.get("signature") == expected
-        # the mock "certificate" carries the identity the bundle was made
-        # with; tests can override via _MOCK_CERT_IDENTITY/_MOCK_CERT_ISSUER
-        # to simulate identity/issuer mismatch
         cert_id = os.environ.get("_MOCK_CERT_IDENTITY", envelope.get("identity", ""))
         cert_iss = os.environ.get("_MOCK_CERT_ISSUER", envelope.get("issuer", ""))
         return (lambda: _MockSigstoreVerifier(accept, cert_id, cert_iss),
                 _MockIdentityPolicy(envelope.get("identity", ""),
                                     envelope.get("issuer", "")),
-                b"mock-bundle")
+                _MockBundle())
     monkeypatch.setattr(_signing, "_sigstore_transport", mock_transport)
     yield
 

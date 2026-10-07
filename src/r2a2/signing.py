@@ -343,12 +343,15 @@ def _sigstore_verify(envelope: dict, digest: str) -> str:
             "no OIDC issuer constraint on the envelope; refusing identity "
             "authentication without one (fail closed)")
     try:
-        verifier_factory, policy_obj, bundle_bytes = _sigstore_transport(
+        verifier_factory, policy_obj, bundle = _sigstore_transport(
             envelope, digest)
         verifier = verifier_factory()
-        verifier.verify(input_=digest.encode(),
-                        bundle=bundle_bytes,
-                        policy=policy_obj)   # <- identity+issuer binding
+        # 4.x lifecycle: verify_artifact(input, Bundle, Identity policy) —
+        # the SAME method the compatibility tests exercise against real
+        # Bundle/Verifier classes
+        verifier.verify_artifact(input_=digest.encode(),
+                                 bundle=bundle,
+                                 policy=policy_obj)
         return CONTENT_VALID
     except SigstoreVerificationError:
         raise
@@ -366,22 +369,31 @@ class SigstoreVerificationError(RuntimeError):
 
 
 def _sigstore_transport(envelope: dict, digest: str):
-    """Locate the Sigstore verification machinery.
+    """Locate the Sigstore verification machinery (sigstore-python 4.x).
 
-    Production: builds a sigstore Identity policy bound to the EXPECTED
-    certificate identity and OIDC issuer (from the envelope), so the client
-    itself enforces that the bundle was signed by exactly that identity from
-    that issuer. Returns (verifier_factory, identity_policy, bundle).
+    Production: reconstructs the REAL `verify.Bundle` object from the stored
+    canonical JSON bundle via the supported `Bundle.from_json(...)` API, and
+    builds an `Identity` verification policy bound to the EXPECTED certificate
+    identity and OIDC issuer (from the envelope), so the client itself
+    enforces that the bundle was signed by exactly that identity from that
+    issuer. Returns (Verifier_factory, identity_policy, Bundle_object).
+
+    Legacy ad-hoc base64 signatures are REJECTED (fail closed): the 4.x
+    wire format is the canonical Sigstore JSON bundle.
 
     Tests may monkeypatch this to supply a mock verifier exercising the same
     code path — including a mocked certificate identity, so the
     identity-A-signed/envelope-claims-B case fails here.
     """
-    import base64
-    from sigstore.verify import Verifier, policy as spolicy  # type: ignore
-    bundle = base64.b64decode(envelope["signature"])
+    from sigstore import verify as _sverify  # type: ignore
+    if envelope.get("signature_format") != "sigstore-bundle-json":
+        raise SigstoreVerificationError(
+            "unsupported signature format: the supported wire format is the "
+            "canonical Sigstore JSON bundle (sigstore-python >= 4.x); "
+            "legacy base64 signatures are not accepted")
+    bundle = _sverify.Bundle.from_json(envelope["signature"])
     # identity+issuer binding: the CLIENT enforces the certificate SAN and
     # OIDC issuer against these expected values
-    ident = spolicy.Identity(identity=envelope.get("identity", ""),
-                             issuer=envelope.get("issuer", ""))
-    return Verifier.production, ident, bundle
+    ident = _sverify.policy.Identity(identity=envelope.get("identity", ""),
+                                     issuer=envelope.get("issuer", ""))
+    return _sverify.Verifier.production, ident, bundle

@@ -1,3 +1,49 @@
+# R2A2 v0.3.1 — trust closure
+
+## External review of v0.3 (commit c83df63)
+
+**Verdict: ARCHITECTURE: STRONG — TRUST IMPLEMENTATION: ISSUE FOUND.**
+
+Issues found:
+1. Attestation CLI did not verify the stored seal; the seal omitted `notes`
+   and `issues` (which control applicability).
+2. Execution manifest did not bind the full scientific declaration — only ID
+   lists, so a kill condition or transformation class could change without
+   changing the manifest hash.
+3. Transport round-trip omitted `TransformationClass`, comparators,
+   `Test.preregistered`, and general transformations.
+4. Replication records did not preserve the frozen rule, derivation
+   references, or independence evidence; L1/L2/L3 needed to be framed as a
+   declared grade.
+
+## Closure (commit 894f3b0) — all four acceptance conditions met
+
+1. **Attestation tamper-evidence**: `seal()` hashes every semantic field
+   including `notes`, `issues` and schema; the CLI verifier always checks the
+   current content against the **stored** seal and refuses seal-less files.
+   Tested: verdict, notes, and issue-state tampering are all detected through
+   the real CLI; untampered attestations pass.
+2. **Declaration identity**: every manifest carries `theory_declaration_hash`
+   over the full canonical declarative model (assumption texts, kill
+   conditions, comparator definitions, transformation classes, test
+   definitions, preregistration flags) plus stable code references for
+   experiments and hooks. Changing any of those fields changes the identity.
+3. **Lossless transport**: declarative serialization now includes
+   transformation classes (hooks as stable `module.qualname` references,
+   resolved at load time), comparators, `preregistered`, and general
+   transformations. Ambiguous references (multiple lambdas) fail loudly,
+   never guess.
+4. **Content-addressed replication records**: each record carries the frozen
+   agreement rule, both implementations' derivation references, code hashes,
+   independence claims and a `record_hash`; changing the tolerance after the
+   fact changes the hash. The independence level is explicitly labelled a
+   **declared and evidenced grade** that R2A2 cannot verify from strings
+   alone.
+
+98 tests pass (17 new acceptance tests for these conditions).
+
+---
+
 # R2A2 v0.3 milestone: reproducibility and trust
 
 v0.3 question: **can I trust that another person independently reproduced and

@@ -474,6 +474,59 @@ def cmd_verify(args) -> int:
     return 0 if ok else 1
 
 
+
+def _load_policy(path):
+    from r2a2.signing import IdentityPolicy
+    if path and os.path.exists(path):
+        with open(path) as f:
+            d = json.load(f)
+        return IdentityPolicy(**d)
+    # default dev policy: offline mode allowed explicitly
+    return IdentityPolicy(allow_unsigned=True)
+
+
+def cmd_sign_attestation(args) -> int:
+    from r2a2.signing import sign_payload, SIGNER_OFFLINE
+    with open(args.file) as f:
+        att = json.load(f)
+    envelope = sign_payload(
+        {"kind": "r2a2.review-attestation", "attestation": att},
+        signer_backend=args.backend,
+        identity=args.identity, issuer=args.issuer)
+    with open(args.file, "w") as f:
+        json.dump(envelope, f, indent=2)
+    backend = envelope.get("signer_backend")
+    note = ("UNAUTHENTICATED offline dev signature" if backend == SIGNER_OFFLINE
+            else "identity-backed signature")
+    print(f"signed: {args.file} [{backend}] {note}")
+    return 0
+
+
+def cmd_verify_attestation_signed(args) -> int:
+    from r2a2.signing import verify_envelope, _payload_digest
+    with open(args.file) as f:
+        envelope = json.load(f)
+    # re-verify the CONTENT SEAL of the inner attestation first (independent
+    # of the signature), then the identity layer
+    from r2a2.trust import ReviewAttestation, verify_attestation
+    att = envelope["payload"]["attestation"]
+    inner = ReviewAttestation(
+        reviewer=att["reviewer"], scope=att["scope"],
+        manifest_hash=att["manifest_hash"], result_hash=att["result_hash"],
+        code_revision=att["code_revision"], verdict=att["verdict"],
+        notes=att.get("notes", ""), issues=att.get("issues", []))
+    seal_res = verify_attestation(inner, args.manifest_hash, args.result_hash,
+                                  args.revision, sealed_as=att["seal"])
+    policy = _load_policy(args.policy)
+    res = verify_envelope(envelope, policy)
+    print(f"content seal: {'INTACT' if seal_res['applies'] else 'BROKEN'}")
+    print(f"signature content: {res['content']}")
+    print(f"identity: {res['identity']} (claim: {res.get('identity_claim')})")
+    print(f"overall trusted: {res['trusted']}")
+    ok = seal_res["applies"] and res["content"] == "CONTENT VALID" and \
+        (res["trusted"] or (res["identity"] == "UNAUTHENTICATED (offline dev mode)"))
+    return 0 if ok else 1
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="r2a2", description=__doc__)
     p.add_argument("--version", action="version", version=f"r2a2 {__version__}")
@@ -539,6 +592,22 @@ def main(argv=None) -> int:
     s.add_argument("--notes", default="")
     s.add_argument("-o", "--output", default="attestation.json")
     s.set_defaults(fn=cmd_attest)
+
+    s = sub.add_parser("sign-attestation", help="sign a review attestation (identity-backed or offline dev mode)")
+    s.add_argument("file")
+    s.add_argument("--backend", default=None)
+    s.add_argument("--identity", default=None)
+    s.add_argument("--issuer", default=None)
+    s.set_defaults(fn=cmd_sign_attestation)
+
+    s = sub.add_parser("verify-signed-attestation",
+                       help="verify signature + content seal of a signed attestation")
+    s.add_argument("file")
+    s.add_argument("--policy", default=None)
+    s.add_argument("--manifest-hash", required=True)
+    s.add_argument("--result-hash", required=True)
+    s.add_argument("--revision", required=True)
+    s.set_defaults(fn=cmd_verify_attestation_signed)
 
     s = sub.add_parser("verify-attestation",
                        help="check an attestation still applies to given artifacts")

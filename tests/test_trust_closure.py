@@ -142,11 +142,13 @@ def test_transformation_class_change_changes_identity():
     assert m1.theory_declaration_hash != m2.theory_declaration_hash
 
 
-def test_experiment_code_ref_change_changes_identity():
+def test_experiment_code_binding_change_changes_identity():
     d = theory_to_dict(toy_theory.THEORY)
-    d["experiments_refs"] = {"predict": "other_module.other_fn"}
+    d["experiments_bindings"] = {"predict": {"ref": "other_module:other_fn",
+                                             "source_hash": "x"}}
     decl = theory_to_dict(toy_theory.THEORY)
-    decl["experiments_refs"] = {"predict": "toy_theory.predictive_half_life"}
+    decl["experiments_bindings"] = {"predict": {"ref": "toy_theory:predictive_half_life",
+                                                "source_hash": "y"}}
     assert canonical_hash(d) != canonical_hash(decl)
 
 
@@ -210,3 +212,106 @@ def test_replication_record_content_addressed_and_tamper_evident():
 def test_independence_grade_is_declared_not_verified():
     rec = _replication().evaluate()
     assert rec["independence_note"].startswith("declared and evidenced")
+
+# ===========================================================================
+# v0.3.2 — executable provenance closure (review of d02bdf9)
+#
+# Acceptance conditions:
+#   (1) change function body (same name)  => manifest identity changes
+#   (2) tamper replication verdict        => verification fails
+#   (3) round-trip dotted-module theory   => same executable bindings
+# ===========================================================================
+
+def test_body_edit_same_name_changes_manifest_identity(tmp_path):
+    """Condition 1: the manifest binds source CONTENT, not just the name."""
+    # write a module with an experiment, compile it
+    mod = tmp_path / "victim_theory.py"
+    mod.write_text(
+        "from r2a2.api import Theory, Parameter, Prediction, Test\n"
+        "def _predict(a=2.0, b=1.0):\n"
+        "    return {\"y2\": a * 2 + b}\n"
+        "def _identity(a=2.0, b=1.0):\n"
+        "    return {\"residual\": 0.0}\n"
+        "THEORY = Theory(\n"
+        "    id=\"victim\", version=\"1\",\n"
+        "    parameters=[Parameter(\"a\", kind=\"commitment\", value=2.0)],\n"
+        "    predictions=[Prediction(\"P\", \"d\", \"predict\", \"y2\", \"kill\",\n"
+        "                            parameters=[\"a\"])],\n"
+        "    tests=[Test(\"T\", kind=\"identity\", experiment=\"identity\", exact=True)],\n"
+        "    experiments={\"predict\": _predict, \"identity\": _identity},\n"
+        ")\n")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        spec = importlib.util.spec_from_file_location("victim_theory", mod)
+        victim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(victim)
+        m1, _ = compile_theory(victim.THEORY); m1.freeze()
+
+        # now EDIT THE BODY without renaming, reload, recompile
+        text = mod.read_text().replace("return {\"y2\": a * 2 + b}",
+                                       "return {\"y2\": a * 2 + b + 1000.0}")
+        mod.write_text(text)
+        spec2 = importlib.util.spec_from_file_location("victim_theory", mod)
+        victim2 = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(victim2)
+        m2, _ = compile_theory(victim2.THEORY); m2.freeze()
+
+        assert m1.experiment_bindings["predict"]["ref"] == \
+            m2.experiment_bindings["predict"]["ref"], "same name expected"
+        assert m1.theory_declaration_hash != m2.theory_declaration_hash, \
+            "body edit must change the declaration hash"
+        assert m1.hash != m2.hash, "body edit must change the manifest identity"
+    finally:
+        sys.path.remove(str(tmp_path))
+
+
+def test_tampered_replication_verdict_fails_verification():
+    """Condition 2: record_hash binds agrees/detail; a flipped verdict fails."""
+    from r2a2.trust import verify_replication_record
+    a = Implementation("implA", code_hash="hA", derivation_ref="d1")
+    b = Implementation("implB", code_hash="hB", derivation_ref="d1")
+    rep = Replication("T", a, b, AgreementRule(tolerance=1e-6),
+                      value_a=1.0, value_b=1.0, manifest_hash="M")
+    rec = rep.evaluate()
+    assert verify_replication_record(rec)["applies"] is True
+
+    # tamper: flip the verdict but keep everything else (incl. record_hash)
+    import copy
+    tampered = copy.deepcopy(rec)
+    tampered["agrees"] = not tampered["agrees"]
+    res = verify_replication_record(tampered)
+    assert res["applies"] is False and res["verdict_valid"] is False
+
+    # tamper: change a value under the same record_hash
+    tampered2 = copy.deepcopy(rec)
+    tampered2["value_b"] = 9.0
+    res2 = verify_replication_record(tampered2)
+    assert res2["applies"] is False
+
+
+def test_dotted_module_round_trip_keeps_executable_bindings(tmp_path):
+    """Condition 3: 'pkg.mod:qualname' references survive round-trip."""
+    pkg = tmp_path / "fakepkg"
+    (pkg / "models").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "models" / "__init__.py").write_text("")
+    (pkg / "models" / "gravity.py").write_text(
+        "def solve(a=1.0):\n    return {\"x\": a * 2}\n")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from fakepkg.models import gravity
+        d = {
+            "id": "dotted", "version": "1",
+            "predictions": [{"id": "P", "experiment": "solve",
+                             "kill_condition": "x>0", "observable": "x"}],
+            "experiments": {"solve": gravity.solve.__module__ + ":" + gravity.solve.__qualname__},
+        }
+        t2 = theory_from_dict(d)
+        assert t2.experiments["solve"] is gravity.solve
+        # and the serialization round-trips to the same reference
+        assert theory_to_dict(t2)["experiments"]["solve"] == "fakepkg.models.gravity:solve"
+    finally:
+        sys.path.remove(str(tmp_path))
+
+
+import importlib.util  # noqa: E402  (used by condition-1 test)

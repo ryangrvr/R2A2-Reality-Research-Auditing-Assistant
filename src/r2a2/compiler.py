@@ -61,8 +61,8 @@ class ExecutionManifest:
     theory_declaration_hash: str = ""
     # code-binding references: experiment name -> (module, qualname) so the
     # implementing code is pinned to the manifest
-    experiment_refs: Dict[str, str] = field(default_factory=dict)
-    transformation_refs: Dict[str, str] = field(default_factory=dict)
+    experiment_bindings: Dict[str, dict] = field(default_factory=dict)
+    transformation_bindings: Dict[str, dict] = field(default_factory=dict)
     seeds: Dict[str, int] = field(default_factory=dict)
     backend: str = "local"
     environment: Dict[str, str] = field(default_factory=dict)
@@ -91,14 +91,48 @@ class ExecutionManifest:
         return dict(self.__dict__)
 
 
-def _code_ref(fn) -> str:
-    """Stable reference to a callable: module.qualname (code is pinned by
-    reference + hash at execution time, not embedded in the manifest)."""
+def _module_qualname(fn) -> str:
+    """Reference part of a binding: 'module.qualname'."""
     if fn is None:
         return ""
     mod = getattr(fn, "__module__", None)
     qual = getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn)))
-    return f"{mod}.{qual}" if mod else str(qual)
+    return f"{mod}:{qual}" if mod else str(qual)   # colon: module:qualname
+
+
+def _source_hash(fn) -> str:
+    """Content hash of the callable's source, fallback to its module's source.
+
+    Binds the EXECUTING implementation, not just its name: editing a function
+    body without renaming it changes the hash. Builtins/C extensions without
+    retrievable source hash to '' (declared as unbound content).
+    """
+    if fn is None:
+        return ""
+    try:
+        import inspect
+        src = inspect.getsource(fn)
+    except (OSError, TypeError):
+        src = ""
+    if not src:
+        # fall back to the defining module's full source, if it exists
+        try:
+            import sys
+            mod = sys.modules.get(getattr(fn, "__module__", None))
+            if mod and getattr(mod, "__file__", None):
+                with open(mod.__file__) as f:
+                    src = f.read()
+        except (OSError, TypeError):
+            pass
+    return canonical_hash(src)
+
+
+def code_binding(fn) -> dict:
+    """The full binding: reference + source content hash.
+
+    The trust promise is callable reference + callable/source hash.
+    """
+    return {"ref": _module_qualname(fn), "source_hash": _source_hash(fn)}
 
 
 def compile_theory(theory: Theory, backend: str = "local",
@@ -164,19 +198,27 @@ def compile_theory(theory: Theory, backend: str = "local",
     # preregistration flag, comparator...) changes this hash.
     from .transport import theory_to_dict
     decl = theory_to_dict(theory)
-    decl["experiments_refs"] = {
-        name: _code_ref(fn) for name, fn in sorted(theory.experiments.items())
+    decl["experiments_bindings"] = {
+        name: code_binding(fn) for name, fn in sorted(theory.experiments.items())
     }
-    decl["transformation_class_refs"] = {
-        tc.id: _code_ref(tc) for tc in theory.transformation_classes
+    decl["transformation_class_bindings"] = {
+        tc.id: {k: code_binding(getattr(tc, k)) for k in
+                ("is_member", "compose", "canonicalize", "invariants",
+                 "quotient_distance", "optimise")}
+        for tc in theory.transformation_classes
     }
-    decl["comparator_refs"] = {
-        c.id: _code_ref(c.model) if c.model else "" for c in theory.comparators
+    decl["comparator_bindings"] = {
+        c.id: code_binding(c.model) for c in theory.comparators
     }
     declaration_hash = canonical_hash(decl)
 
-    experiment_refs = {name: _code_ref(fn) for name, fn in theory.experiments.items()}
-    transformation_refs = {tc.id: _code_ref(tc) for tc in theory.transformation_classes}
+    experiment_bindings = {
+        name: code_binding(fn) for name, fn in theory.experiments.items()}
+    transformation_bindings = {
+        tc.id: {k: code_binding(getattr(tc, k)) for k in
+                ("is_member", "compose", "canonicalize", "invariants",
+                 "quotient_distance", "optimise")}
+        for tc in theory.transformation_classes}
 
     env = {
         "python": sys.version.split()[0],
@@ -195,7 +237,7 @@ def compile_theory(theory: Theory, backend: str = "local",
         environment=env,
         r2a2_schema=SCHEMA_VERSION,
         theory_declaration_hash=declaration_hash,
-        experiment_refs=experiment_refs,
-        transformation_refs=transformation_refs,
+        experiment_bindings=experiment_bindings,
+        transformation_bindings=transformation_bindings,
     )
     return manifest, ledger

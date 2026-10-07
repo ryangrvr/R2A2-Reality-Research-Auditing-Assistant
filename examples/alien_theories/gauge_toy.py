@@ -62,6 +62,23 @@ def observable_gauge_dep(sign, theta):
     return sign * theta
 
 
+def _expt_measure_inv(sign=1, theta=2.5):
+    return {"abs_theta": observable_gauge_inv(sign, theta)}
+
+
+def _expt_measure_dep(sign=1, theta=2.5):
+    return {
+        "theta_signed": observable_gauge_dep(sign, theta),
+        # variation of the signed observable across the gauge orbit:
+        # nonzero means the observable is NOT gauge-invariant
+        "orbit_variation": observable_gauge_dep(1, theta) - observable_gauge_dep(-1, theta),
+    }
+
+
+def _expt_gauge_identity(sign=-1, theta=2.5):
+    return {"gauge_shift": observable_gauge_inv(-1, theta) - observable_gauge_inv(1, theta)}
+
+
 THEORY = Theory(
     id="gauge-toy",
     version="0.1.0",
@@ -89,15 +106,8 @@ THEORY = Theory(
                          "gauge map (exact identity: d(Inv, g*Inv) = 0)"),
     ],
     experiments={
-        "measure_inv": lambda sign=1, theta=2.5: {"abs_theta": observable_gauge_inv(sign, theta)},
-        "measure_dep": lambda sign=1, theta=2.5: {
-            "theta_signed": observable_gauge_dep(sign, theta),
-            # variation of the signed observable across the gauge orbit:
-            # nonzero means the observable is NOT gauge-invariant
-            "orbit_variation": observable_gauge_dep(1, theta) - observable_gauge_dep(-1, theta),
-        },
-        "identity": lambda sign=-1, theta=2.5: {
-            "gauge_shift": observable_gauge_inv(-1, theta) - observable_gauge_inv(1, theta),
-        },
+        "measure_inv": _expt_measure_inv,
+        "measure_dep": _expt_measure_dep,
+        "identity": _expt_gauge_identity,
     },
 )

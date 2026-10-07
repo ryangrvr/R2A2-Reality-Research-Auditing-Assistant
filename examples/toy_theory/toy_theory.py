@@ -5,6 +5,18 @@ one prediction with a kill condition, one exact identity test.
 """
 from r2a2.api import Theory, Parameter, Assumption, Prediction, Test
 
+def _expt_predict(a=2.0, b=1.0):
+    return {"y2": a * 2 + b}
+
+
+def _expt_identity(a=2.0, b=1.0):
+    return {"residual": (a * 1 + b) - 3.0}
+
+
+def _expt_hostile(a=2.0, b=1.0):
+    return {"quadratic_coeff": 0.0}
+
+
 THEORY = Theory(
     id="toy-linear",
     version="0.1.0",
@@ -32,8 +44,8 @@ THEORY = Theory(
                          "on the calibration range"),
     ],
     experiments={
-        "predict": lambda a=2.0, b=1.0: {"y2": a * 2 + b},
-        "identity": lambda a=2.0, b=1.0: {"residual": (a * 1 + b) - 3.0},
-        "hostile": lambda a=2.0, b=1.0: {"quadratic_coeff": 0.0},
+        "predict": _expt_predict,
+        "identity": _expt_identity,
+        "hostile": _expt_hostile,
     },
 )

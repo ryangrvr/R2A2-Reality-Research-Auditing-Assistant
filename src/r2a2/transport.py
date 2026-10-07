@@ -38,16 +38,17 @@ def _require(d: dict, key: str, ctx: str):
 
 
 def _ref(fn) -> str:
-    """Stable reference for a hook callable: 'module.qualname'.
+    """Stable reference for a hook callable: 'module:qualname'.
 
-    Executable pieces travel as references, not embedded code; the loader
-    resolves them at import time. None serializes as ''.
+    The colon separates module path from qualname, so dotted packages
+    (my_package.models.gravity:solve) are unambiguous. Executable pieces
+    travel as references + are hashed at compile time; the loader resolves
+    them at import time. None serializes as ''.
     """
     if fn is None:
         return ""
-    mod = getattr(fn, "__module__", None)
-    qual = getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn)))
-    return f"{mod}.{qual}" if mod else str(qual)
+    from .compiler import _module_qualname
+    return _module_qualname(fn)
 
 
 def theory_from_dict(d: Dict[str, Any]) -> Theory:
@@ -60,8 +61,13 @@ def theory_from_dict(d: Dict[str, Any]) -> Theory:
         validity_domain=d.get("validity_domain", ""),
         sources={s["id"]: s.get("description", "")
                  for s in d.get("sources", [])},
-        experiments={k: v for k, v in d.get("experiments", {}).items()},
+        experiments={},  # filled below from references or inline callables
     )
+    for name, ex in d.get("experiments", {}).items():
+        if callable(ex):
+            theory.experiments[name] = ex
+        else:
+            theory.experiments[name] = _resolve(ex)
     for p in d.get("parameters", []):
         theory.parameters.append(Parameter(
             name=str(_require(p, "name", ctx)),
@@ -131,8 +137,12 @@ def _resolve(ref: str, expect_class=False):
     if not ref:
         return None
     import importlib
-    import inspect
-    module_name, _, qual = ref.partition(".")
+    # 'module:qualname' — colon separates module path from qualname, so
+    # dotted package modules like pkg.models.gravity:solve parse correctly.
+    # Legacy 'module.qualname' refs (top-level modules only) still accepted.
+    module_name, _, qual = ref.partition(":")
+    if not _:
+        module_name, _, qual = ref.rpartition(".")
     try:
         mod = importlib.import_module(module_name)
     except ImportError as exc:
@@ -191,7 +201,10 @@ def theory_to_dict(theory: Theory) -> Dict[str, Any]:
                        "comparator": t.comparator, "preregistered": t.preregistered}
                       for t in theory.tests],
             # general transformations (invariance declarations)
-            "transformations": [dict(tr) for tr in theory.transformations],
+            # experiments: executable code travels as module:qualname references
+        "experiments": {name: _ref(fn) for name, fn in
+                        sorted(theory.experiments.items())},
+        "transformations": [dict(tr) for tr in theory.transformations],
             # transformation classes: hooks serialized as stable code references
             "transformation_classes": [
                 {"id": tc.id, "description": tc.description,

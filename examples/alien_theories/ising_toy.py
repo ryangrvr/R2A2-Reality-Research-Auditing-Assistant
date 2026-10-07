@@ -65,6 +65,29 @@ def _energy_mean(K):
     return tot / wsum
 
 
+def _expt_enumerate():
+    return {
+        "m2_low": _magnetization_mean(0.1),
+        "m2_high": _magnetization_mean(1.0),
+        "m2_rise": _magnetization_mean(1.0) - _magnetization_mean(0.1),
+    }
+
+
+def _expt_duality(K=0.3):
+    return {
+        "Z_enum": _Z(K),
+        "Z_closed": 2 * math.exp(8 * K) + 12 * math.exp(4 * K) + 2,
+    }
+
+
+def _expt_hostile():
+    return {
+        "mf_onset_K": 0.25,
+        "enum_onset_K": 0.5,
+        "matches_mean_field": False,
+    }
+
+
 THEORY = Theory(
     id="ising-toy",
     version="0.1.0",
@@ -103,19 +126,8 @@ THEORY = Theory(
                          "finite-lattice ordering onset"),
     ],
     experiments={
-        "enumerate": lambda: {
-            "m2_low": _magnetization_mean(0.1),
-            "m2_high": _magnetization_mean(1.0),
-            "m2_rise": _magnetization_mean(1.0) - _magnetization_mean(0.1),
-        },
-        "duality": lambda K=0.3: {
-            "Z_enum": _Z(K),
-            "Z_closed": 2 * math.exp(8 * K) + 12 * math.exp(4 * K) + 2,
-        },
-        "hostile": lambda: {
-            "mf_onset_K": 0.25,
-            "enum_onset_K": 0.5,
-            "matches_mean_field": False,
-        },
+        "enumerate": _expt_enumerate,
+        "duality": _expt_duality,
+        "hostile": _expt_hostile,
     },
 )

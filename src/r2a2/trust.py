@@ -122,14 +122,49 @@ class Replication:
         })
 
     def evaluate(self) -> Dict[str, Any]:
+        # Compute the verdict FIRST, then hash the complete evaluated record;
+        # only the hash itself is added afterward, so any tampering with
+        # agrees/detail (or with the rule/values) breaks the hash.
         agrees, detail = self.rule.check(self.value_a, self.value_b)
         record = self.to_record()
-        record.update({
-            "agrees": agrees,
-            "detail": detail,
-            "record_hash": canonical_hash(record),
-        })
+        record.update({"agrees": agrees, "detail": detail})
+        record["record_hash"] = canonical_hash(record)
         return record
+
+
+def verify_replication_record(record: dict) -> Dict[str, Any]:
+    """Recompute the verdict from the bound rule and values, and check the
+    record_hash binds it.
+
+    Rejects records whose stored agrees/detail disagree with the recomputed
+    verdict, or whose content no longer matches the recorded hash — i.e., a
+    stored "agrees": true edited to "false" is caught.
+    """
+    import copy
+    rec = copy.deepcopy(record)
+    claimed_hash = rec.pop("record_hash", None)
+    if claimed_hash is None:
+        raise ValueError("record has no record_hash; it is not content-addressed")
+    # recompute what the verdict SHOULD be from the bound rule + values
+    rule = rec["rule"]
+    a, b = rec["value_a"], rec["value_b"]
+    if rule["kind"] == "structural":
+        agrees, detail = canonical_hash(a) == canonical_hash(b), \
+            "structural equality of machine-readable output"
+    else:
+        delta = abs(float(a) - float(b))
+        agrees, detail = delta < rule["tolerance"], \
+            f"|{a} - {b}| = {delta} < {rule['tolerance']}"
+    # hash of the record AS STORED (without hash field) must match
+    stored_hash_ok = canonical_hash(rec) == claimed_hash
+    stored_verdict_ok = (rec.get("agrees") == agrees and rec.get("detail") == detail)
+    return stamp({
+        "verdict_valid": stored_verdict_ok,
+        "hash_valid": stored_hash_ok,
+        "applies": stored_hash_ok and stored_verdict_ok,
+        "recomputed_agrees": agrees,
+        "recomputed_detail": detail,
+    })
 
 
 # --------------------------------------------------------------------------

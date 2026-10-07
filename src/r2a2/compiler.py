@@ -104,18 +104,21 @@ def _source_hash(fn) -> str:
     """Content hash of the callable's source, fallback to its module's source.
 
     Binds the EXECUTING implementation, not just its name: editing a function
-    body without renaming it changes the hash. Builtins/C extensions without
-    retrievable source hash to '' (declared as unbound content).
+    body without renaming it changes the hash.
+
+    If NO source can be established (builtins, C extensions), returns the
+    explicit sentinel ``UNBOUND`` — never hash-of-empty-string, which would
+    make an unbound executable look content-bound.
     """
+    UNBOUND = "<unbound>"
     if fn is None:
-        return ""
+        return UNBOUND
     try:
         import inspect
         src = inspect.getsource(fn)
     except (OSError, TypeError):
         src = ""
     if not src:
-        # fall back to the defining module's full source, if it exists
         try:
             import sys
             mod = sys.modules.get(getattr(fn, "__module__", None))
@@ -124,15 +127,37 @@ def _source_hash(fn) -> str:
                     src = f.read()
         except (OSError, TypeError):
             pass
+    if not src:
+        return UNBOUND  # explicitly UNBOUND, visibly, never a fake hash
     return canonical_hash(src)
 
 
 def code_binding(fn) -> dict:
-    """The full binding: reference + source content hash.
+    """The full binding: reference + source content hash (or UNBOUND marker).
 
     The trust promise is callable reference + callable/source hash.
     """
     return {"ref": _module_qualname(fn), "source_hash": _source_hash(fn)}
+
+
+def declaration_hash_of(theory: Theory) -> str:
+    """The canonical declaration hash of a theory — the single definition
+    used at compile time and re-verified by the runner at execution time."""
+    from .transport import theory_to_dict
+    decl = theory_to_dict(theory)
+    decl["experiments_bindings"] = {
+        name: code_binding(fn) for name, fn in sorted(theory.experiments.items())
+    }
+    decl["transformation_class_bindings"] = {
+        tc.id: {k: code_binding(getattr(tc, k)) for k in
+                ("is_member", "compose", "canonicalize", "invariants",
+                 "quotient_distance", "optimise")}
+        for tc in theory.transformation_classes
+    }
+    decl["comparator_bindings"] = {
+        c.id: code_binding(c.model) for c in theory.comparators
+    }
+    return canonical_hash(decl)
 
 
 def compile_theory(theory: Theory, backend: str = "local",
@@ -192,25 +217,9 @@ def compile_theory(theory: Theory, backend: str = "local",
                    test_kind=t.kind, exact=t.exact, preregistered=t.preregistered)
 
     # --- full scientific declaration hash -------------------------------
-    # Uses the canonical transport serialization of the declarative model,
-    # plus code references for the executable hooks. Changing ANY scientific
-    # semantic field (kill condition, assumption text, transformation class,
-    # preregistration flag, comparator...) changes this hash.
-    from .transport import theory_to_dict
-    decl = theory_to_dict(theory)
-    decl["experiments_bindings"] = {
-        name: code_binding(fn) for name, fn in sorted(theory.experiments.items())
-    }
-    decl["transformation_class_bindings"] = {
-        tc.id: {k: code_binding(getattr(tc, k)) for k in
-                ("is_member", "compose", "canonicalize", "invariants",
-                 "quotient_distance", "optimise")}
-        for tc in theory.transformation_classes
-    }
-    decl["comparator_bindings"] = {
-        c.id: code_binding(c.model) for c in theory.comparators
-    }
-    declaration_hash = canonical_hash(decl)
+    # Single definition in declaration_hash_of(): the declarative model plus
+    # content-hashed code bindings. The runner re-verifies this at execution.
+    declaration_hash = declaration_hash_of(theory)
 
     experiment_bindings = {
         name: code_binding(fn) for name, fn in theory.experiments.items()}

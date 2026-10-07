@@ -527,6 +527,63 @@ def cmd_verify_attestation_signed(args) -> int:
         (res["trusted"] or (res["identity"] == "UNAUTHENTICATED (offline dev mode)"))
     return 0 if ok else 1
 
+
+def cmd_ci_verify(args) -> int:
+    from r2a2.ci_verify import ci_verify, EXIT_NAMES
+    theory = _load_theory(args.theory)
+    policy, atts = None, None
+    if args.policy:
+        policy = _load_policy(args.policy)
+    if args.attestations:
+        with open(args.attestations) as f:
+            atts = json.load(f)
+    code, report = ci_verify(theory, policy, atts)
+    for st in report["steps"]:
+        status = "OK " if st["ok"] else "FAIL"
+        line = f"[{status}] {st['step']}"
+        if not st["ok"]:
+            line += f" ({st['failure_kind']}) {st['error'][:120]}"
+        elif st.get("detail"):
+            line += f": {st['detail']}"
+        print(line)
+    print(f"CI result: {EXIT_NAMES.get(code, code)}")
+    return code
+
+
+def cmd_plugins_list(args):
+    from r2a2.plugins import PluginPolicy, PluginManifest
+    import glob as g
+    found = []
+    for mf in g.glob(os.path.join(args.dir, "*.plugin.json")):
+        with open(mf) as f:
+            found.append(PluginManifest.from_dict(json.load(f)))
+    policy = PluginPolicy(allow_unsigned=True, trusted_ids=args.trusted or [])
+    for m in found:
+        rep = policy.evaluate(m)
+        print(f"{m.plugin_id} v{m.version} [{m.execution_class}] "
+              f"api={m.extension_api} trusted={rep['trusted']}")
+    if not found:
+        print("no plugin manifests (*.plugin.json) found")
+    return 0
+
+
+def cmd_plugins_inspect(args):
+    from r2a2.plugins import PluginManifest, inspect_plugin
+    with open(args.manifest) as f:
+        print(inspect_plugin(PluginManifest.from_dict(json.load(f))))
+    return 0
+
+
+def cmd_plugins_verify(args):
+    from r2a2.plugins import PluginManifest, PluginPolicy
+    with open(args.manifest) as f:
+        m = PluginManifest.from_dict(json.load(f))
+    rep = PluginPolicy(allow_unsigned=args.allow_unsigned,
+                       trusted_ids=args.trusted or [],
+                       identity_policy=_load_policy(args.policy)).evaluate(m)
+    print(json.dumps(rep, indent=2))
+    return 0 if rep["trusted"] else 1
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="r2a2", description=__doc__)
     p.add_argument("--version", action="version", version=f"r2a2 {__version__}")
@@ -640,6 +697,19 @@ def main(argv=None) -> int:
     s.add_argument("--author", action="append")
     s.add_argument("--revision", default="")
     s.set_defaults(fn=cmd_export_prov)
+
+    s = sub.add_parser("ci", help="non-interactive CI verification with failure-kind exit codes")
+    s.add_argument("verify")
+    s.add_argument("theory")
+    s.add_argument("--policy", default=None)
+    s.add_argument("--attestations", default=None)
+    s.set_defaults(fn=cmd_ci_verify)
+
+    s = sub.add_parser("plugins", help="plugin management")
+    sub2 = s.add_subparsers(dest="plugin_cmd", required=True)
+    p2 = sub2.add_parser("list"); p2.add_argument("--dir", default="."); p2.add_argument("--trusted", nargs="*"); p2.set_defaults(fn=cmd_plugins_list)
+    p2 = sub2.add_parser("inspect"); p2.add_argument("manifest"); p2.set_defaults(fn=cmd_plugins_inspect)
+    p2 = sub2.add_parser("verify"); p2.add_argument("manifest"); p2.add_argument("--allow-unsigned", action="store_true"); p2.add_argument("--trusted", nargs="*"); p2.add_argument("--policy", default=None); p2.set_defaults(fn=cmd_plugins_verify)
 
     s = sub.add_parser("init-project", help="scaffold a full external-user theory project")
     s.add_argument("dir")

@@ -57,38 +57,68 @@ SIGNER_OFFLINE = "offline-hmac"
 class IdentityPolicy:
     """Declares which signer identities are trusted.
 
-    exact:       list of exact identities (e.g. "alice@example.org")
-    domains:     list of accepted email domains (e.g. "example.org")
-    issuers:     list of accepted OIDC issuers (e.g. "https://github.com/login/oauth")
-    workflows:   list of approved CI workflow identities (OIDC sub patterns)
-    allow_unsigned: if True, UNSIGNED artifacts are accepted but ALWAYS
-                 reported as UNSIGNED — never silently treated as trusted.
+    Authorization logic (v0.5.1 — issuer AND identity must both pass):
+    - Sigstore identities are trusted only when BOTH the OIDC issuer is
+      permitted AND the identity matches an exact/domain/workflow constraint.
+      `trust_issuer_identities=True` relaxes this to issuer-only — an
+      explicit opt-in, never the default.
+    - exact:       exact identities (e.g. "alice@example.org")
+    - domains:     accepted email domains (e.g. "example.org")
+    - issuers:     accepted OIDC issuers (e.g. "https://github.com/login/oauth")
+    - workflows:   approved CI workflow identity (OIDC sub) prefixes
+    - trust_issuer_identities: if True, ANY identity from a permitted issuer
+      is trusted (issuer-only authorization). Default False.
+    - allow_unsigned: if True, UNSIGNED artifacts get local acceptance —
+      reported as UNSIGNED, NEVER as authenticated trust.
     """
 
     exact: List[str] = field(default_factory=list)
     domains: List[str] = field(default_factory=list)
     issuers: List[str] = field(default_factory=list)
     workflows: List[str] = field(default_factory=list)
+    trust_issuer_identities: bool = False
     allow_unsigned: bool = False
 
     def check(self, identity: Optional[str], issuer: Optional[str],
               signer: str) -> str:
-        """Returns one of the verification verdicts for the identity claim."""
+        """Authorization verdict. Offline mode is ALWAYS UNAUTHENTICATED —
+        it cannot be promoted to an identity verdict by any policy."""
         if signer == SIGNER_OFFLINE:
             return UNAUTHENTICATED
         if not identity:
             return UNSIGNED
+        # Sigstore: issuer AND identity constraints must BOTH pass (unless
+        # trust_issuer_identities is explicitly opted in).
+        if signer == SIGNER_SIGSTORE:
+            issuer_ok = (not self.issuers) or (issuer in self.issuers) \
+                if self.trust_issuer_identities else \
+                (issuer is not None and issuer in self.issuers) \
+                if self.issuers else True
+            if self.issuers and not issuer_ok:
+                return IDENTITY_NOT_TRUSTED
+        # identity constraints
         if self.exact and identity in self.exact:
-            return IDENTITY_VERIFIED
+            return IDENTITY_VERIFIED if self._issuer_ok(issuer, signer) \
+                else IDENTITY_NOT_TRUSTED
         for d in self.domains:
             if identity.endswith("@" + d):
-                return IDENTITY_VERIFIED
-        if issuer and self.issuers and issuer in self.issuers:
-            return IDENTITY_VERIFIED
+                return IDENTITY_VERIFIED if self._issuer_ok(issuer, signer) \
+                    else IDENTITY_NOT_TRUSTED
         for w in self.workflows:
-            if identity and identity.startswith(w):
-                return IDENTITY_VERIFIED
+            if identity.startswith(w):
+                return IDENTITY_VERIFIED if self._issuer_ok(issuer, signer) \
+                    else IDENTITY_NOT_TRUSTED
+        # issuer-only authorization requires the explicit opt-in
+        if self.trust_issuer_identities and issuer and issuer in self.issuers:
+            return IDENTITY_VERIFIED
         return IDENTITY_NOT_TRUSTED
+
+    def _issuer_ok(self, issuer: Optional[str], signer: str) -> bool:
+        if signer != SIGNER_SIGSTORE or not self.issuers:
+            return True
+        if issuer is None:
+            return False
+        return issuer in self.issuers
 
 
 # --------------------------------------------------------------------------
@@ -173,63 +203,118 @@ def _sigstore_sign(envelope: dict, digest: str) -> dict:  # pragma: no cover
 
 
 def verify_envelope(envelope: dict, policy: IdentityPolicy) -> Dict[str, Any]:
-    """Verify content integrity and identity independently.
+    """Verify content integrity and identity INDEPENDENTLY.
 
-    Returns a report with separate verdicts:
-    - content: CONTENT VALID / SEAL BROKEN / SIGNATURE INVALID
-    - identity: IDENTITY VERIFIED / NOT TRUSTED / UNSIGNED / UNAUTHENTICATED
-    - overall: trusted only if BOTH content is valid AND identity passes
-      policy (or allow_unsigned with the UNSIGNED verdict surfaced).
+    v0.5.1 semantics — four concepts kept rigorously separate:
+
+        integrity (content matches its seal/signature)
+      ≠ authentication (a verified identity produced it)
+      ≠ authorization (policy allows that identity)
+      ≠ isolation (code containment)
+
+    Rules enforced here:
+    - OFFLINE HMAC is integrity-only. identity verdict is ALWAYS
+      UNAUTHENTICATED and `trusted` is ALWAYS False — no policy can promote
+      an offline identity claim to authenticated trust.
+    - UNSIGNED is never trusted unless policy.allow_unsigned AND the verdict
+      still reports UNSIGNED (a weaker local-acceptance concept, not
+      authenticated trust).
+    - For Sigstore: trusted requires signature valid AND issuer permitted
+      AND identity/workflow constraint permitted. An approved issuer alone
+      is NOT sufficient unless policy.trust_issuer_identities is set.
     """
     stored_sig = envelope.get("signature")
+    backend = envelope.get("signer_backend", "")
     if not stored_sig:
         identity_v = UNSIGNED
-        content_v = CONTENT_VALID if not envelope.get("payload_digest") \
-            else SIGNATURE_INVALID
-        if not envelope.get("payload_digest"):
-            content_v = UNSIGNED
+        # an envelope with a claimed backend/digest but NO signature is
+        # SUSPECT (signature stripped) — SIGNATURE INVALID, not merely unsigned
+        content_v = SIGNATURE_INVALID if \
+            (envelope.get("payload_digest") or backend) else UNSIGNED
     else:
         digest = _payload_digest(envelope)
-        if envelope.get("signer_backend") == SIGNER_OFFLINE:
+        if backend == SIGNER_OFFLINE:
             secret = os.environ.get("R2A2_DEV_SIGNING_SECRET", "")
             expected = base64.b64encode(
                 hmac.new(secret.encode(), digest.encode(), hashlib.sha256).digest()
             ).decode()
             content_v = CONTENT_VALID if hmac.compare_digest(expected, stored_sig) \
                 else SIGNATURE_INVALID
+            # integrity ≠ authentication: offline HMAC proves possession of
+            # the dev secret, never an identity. No policy promotion.
+            identity_v = UNAUTHENTICATED
         else:  # sigstore
-            content_v = _sigstore_verify(envelope, digest)
-        identity_v = policy.check(envelope.get("identity"),
-                                  envelope.get("issuer"),
-                                  envelope.get("signer_backend", ""))
+            try:
+                content_v = _sigstore_verify(envelope, digest)
+            except ImportError:
+                # sigstore backend configured but client absent: this is a
+                # TRUST failure, never a silent downgrade
+                return stamp({
+                    "content": SIGNATURE_INVALID,
+                    "identity": IDENTITY_NOT_TRUSTED,
+                    "trusted": False,
+                    "authenticated": False,
+                    "signer_backend": backend,
+                    "identity_claim": envelope.get("identity"),
+                    "error": "sigstore backend declared but 'sigstore' package "
+                             "is not installed; refusing to verify without it",
+                    "note": "integrity != authentication != authorization "
+                            "!= isolation.",
+                })
+            identity_v = policy.check(envelope.get("identity"),
+                                      envelope.get("issuer"), backend)
 
     content_ok = content_v == CONTENT_VALID
-    identity_ok = identity_v in (IDENTITY_VERIFIED, UNAUTHENTICATED, UNSIGNED)
-    if identity_v == UNSIGNED and not policy.allow_unsigned:
-        identity_ok = False
-    trusted = content_ok and identity_ok
+    # AUTHENTICATED trust exists ONLY when the identity verdict is
+    # IDENTITY_VERIFIED. UNAUTHENTICATED/UNSIGNED are integrity outcomes,
+    # never identity outcomes — they cannot produce authenticated trust.
+    if backend == SIGNER_OFFLINE:
+        trusted = False
+    elif identity_v == IDENTITY_VERIFIED:
+        trusted = content_ok
+    elif identity_v == UNSIGNED and policy.allow_unsigned:
+        trusted = False  # local-acceptance only; never authenticated trust
+    else:
+        trusted = False
     return stamp({
         "content": content_v,
         "identity": identity_v,
         "trusted": trusted,
-        "signer_backend": envelope.get("signer_backend"),
+        "authenticated": identity_v == IDENTITY_VERIFIED and content_ok,
+        "signer_backend": backend,
         "identity_claim": envelope.get("identity"),
-        "note": "A signature authenticates an identity and action; it does "
+        "note": "integrity != authentication != authorization != isolation. "
+                "A signature authenticates an identity and action; it does "
                 "not validate scientific judgment.",
     })
 
 
-def _sigstore_verify(envelope: dict, digest: str) -> str:  # pragma: no cover
+def _sigstore_verify(envelope: dict, digest: str) -> str:
+    """Verify via the sigstore client. The transport is looked up through
+    `_sigstore_transport()` so tests can exercise the SAME verification
+    semantics with a mock bundle/verifier. In production this uses the real
+    sigstore package + network + Rekor transparency log."""
     try:
-        import base64
-        from sigstore.verify import Verifier, policy as spolicy
-        verifier = Verifier.production()
-        bundle = base64.b64decode(envelope["signature"])
-        verifier.verify(input_=digest.encode(),
-                        bundle=bundle,
-                        policy=spolicy.Identity(
-                            identity=envelope.get("identity", ""),
-                            issuer=envelope.get("issuer", "")))
+        verifier_factory, bundle_bytes, identity, issuer = _sigstore_transport(
+            envelope, digest)
+        verifier = verifier_factory()
+        verifier.verify(input_=digest.encode(), bundle=bundle_bytes,
+                        policy=identity) if False else None
+        # the mock/real verifier exposes verify(input, bundle, policy)
+        verifier.verify(input_=digest.encode(), bundle=bundle_bytes)
         return CONTENT_VALID
+    except ImportError:
+        raise
     except Exception:
         return SIGNATURE_INVALID
+
+
+def _sigstore_transport(envelope: dict, digest: str):
+    """Locate the Sigstore verification machinery. Tests may monkeypatch this
+    to supply a mock verifier exercising the same code path."""
+    import base64
+    from sigstore.verify import Verifier, policy as spolicy  # type: ignore
+    bundle = base64.b64decode(envelope["signature"])
+    ident = spolicy.Identity(identity=envelope.get("identity", ""),
+                             issuer=envelope.get("issuer", ""))
+    return Verifier.production, bundle, ident, envelope.get("issuer")

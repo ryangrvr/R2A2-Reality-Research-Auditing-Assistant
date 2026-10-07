@@ -3,12 +3,14 @@
 TRUSTED in-process: a normal Python extension loaded into the R2A2 process.
 It has the full power of the process — this is stated plainly, not hidden.
 
-UNTRUSTED isolated: runs across a REAL process boundary via a subprocess
-protocol with machine-readable stdio and explicit capability grants.
-No Python-level monkey-patching/import-restriction is advertised as a
-security sandbox: if isolation is claimed, it is enforced by the OS process
-boundary, and capabilities that cannot be safely isolated are REFUSED
-("unsupported isolation" beats fake isolation).
+UNTRUSTED subprocess (`untrusted-subprocess`): runs in a SEPARATE OS process
+with machine-readable stdio and protocol-level capability validation.
+This provides process separation and protocol grants — NOT hostile-code
+containment. The plugin process inherits the launching user's OS privileges
+and can open files/sockets the OS permits. If real containment (filesystem/
+network sandboxing) is required, that needs an OS/container sandbox; R2A2
+does not implement a home-grown Python sandbox. Capabilities the runner
+cannot enforce are REFUSED BEFORE the plugin code executes.
 
 An unsigned plugin may be allowed only by explicit policy and is never
 silently promoted to trusted because it imported successfully.
@@ -28,7 +30,13 @@ from .schema import SCHEMA_VERSION, stamp
 
 # execution classes
 TRUSTED_INPROCESS = "trusted-in-process"
-UNTRUSTED_ISOLATED = "untrusted-isolated"
+# v0.5.1 HONEST TERMINOLOGY: a plain subprocess is a PROCESS BOUNDARY, not a
+# filesystem/network sandbox. The plugin process inherits the user's OS
+# privileges; it can open files and sockets the OS permits. What this mode
+# provides: separate process, protocol-level capability validation on
+# runner-mediated operations, no shared memory with R2A2. What it does NOT
+# provide: hostile-code containment. See THREAT_MODEL.md.
+UNTRUSTED_ISOLATED = "untrusted-subprocess"
 
 # capability keys (explicit grants; anything not declared is refused)
 CAP_READ_INPUT = "read-declared-input"
@@ -205,7 +213,20 @@ class IsolatedExecutor:
             read_paths: List[str] = None,
             timeout: int = 120,
             module_paths: List[str] = None) -> Dict[str, Any]:
+        # REFUSED-BEFORE-EXECUTION (v0.5.1): capabilities the runner cannot
+        # enforce abort the request BEFORE the plugin process is launched.
+        # The plugin demonstrably never runs.
         refused = [c for c in manifest.capabilities if c in REFUSED_DEFAULT]
+        if refused:
+            return {
+                "ok": False,
+                "aborted_before_execution": True,
+                "refused_capabilities": refused,
+                "error": (f"refused before execution: {refused} cannot be "
+                          "enforced by the subprocess mode; plugin was NOT "
+                          "launched"),
+                "note": "unsupported isolation beats fake isolation",
+            }
         # ENFORCEMENT (v0.5): any path-typed argument must be covered by a
         # declared read grant, and grants only exist for ISOLATABLE
         # capabilities that the manifest actually declares. This is the
@@ -240,9 +261,6 @@ class IsolatedExecutor:
         except json.JSONDecodeError:
             return {"ok": False,
                     "error": f"plugin produced no valid response: {proc.stderr[-400:]}"}
-        if refused:
-            resp["refused_capabilities"] = refused
-            resp["note"] = "refused capabilities cannot be isolated in v0.5"
         return resp
 
 

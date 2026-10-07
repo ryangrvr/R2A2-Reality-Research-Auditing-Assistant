@@ -86,59 +86,74 @@ def verify_release(artifact_path: str,
                    policy: IdentityPolicy = None) -> Dict[str, Any]:
     """Verify a release artifact against its provenance.
 
-    Reports SEPARATE facets — never a single score:
-    - digest match, signature validity, signing identity, provenance
-      presence, source revision, builder identity, policy result.
+    v0.5.1: reports SEPARATE facets and NEVER conflates them into one score.
+    Authenticated release trust requires: digest match AND provenance present
+    AND signature valid AND signing identity authenticated AND policy match.
+    Unsigned provenance may have digest_match=True and provenance_present=True
+    but authenticated_release_trust is ALWAYS False — unsigned means the
+    builder identity is self-asserted, not proven.
     """
-    policy = policy or IdentityPolicy(allow_unsigned=True)
+    policy = policy or IdentityPolicy()
     actual = sha256_file(artifact_path)
 
-    # unwrap a signed provenance envelope if present
     envelope = None
     prov_doc = provenance
     if "payload" in provenance and "provenance" in provenance.get("payload", {}):
         envelope = provenance
         prov_doc = provenance["payload"]["provenance"]
 
+    claimed_builder = (prov_doc.get("builder", {}) or {}).get("id")
     report: Dict[str, Any] = stamp({
         "artifact": os.path.basename(artifact_path),
         "digest_match": None,
-        "signature": None,
-        "signing_identity": None,
         "provenance_present": prov_doc is not None,
         "provenance_shape": "SLSA v1.2" if prov_doc else None,
+        "signature_status": None,
+        "authenticated_identity": None,
+        "claimed_builder": claimed_builder,
+        "authenticated_builder": False,
+        "policy_match": False,
         "source_revision": (prov_doc.get("buildDefinition", {})
                             .get("invocation", {}).get("configSource", {})
                             .get("digest", {}).get("gitCommit")),
-        "builder_identity": (prov_doc.get("builder", {}) or {}).get("id"),
+        # legacy facets (kept for compatibility, subordinate to the above)
+        "signing_identity": None,
         "build_level": prov_doc.get("buildLevel"),
         "trusted": False,
         "facet_notes": [],
     })
 
-    # 1. digest: artifact must match a provenance subject
     subjects = prov_doc.get("subjects", []) if prov_doc else []
     report["digest_match"] = any(
         s.get("digest", {}).get("sha256") == actual for s in subjects)
     if not report["digest_match"]:
         report["facet_notes"].append("artifact digest not found in provenance subjects")
 
-    # 2. signature + identity (independent facets)
+    # AUTHENTICATION: signature must be valid AND identity verified.
     if envelope is not None:
         sig = verify_envelope(envelope, policy)
-        report["signature"] = sig["content"]
+        report["signature_status"] = sig["content"]
         report["signing_identity"] = sig["identity"]
+        report["authenticated_identity"] = (sig["authenticated"] is True)
+        # the authenticated signer must match the CLAIMED builder under policy
+        claim = envelope.get("identity")
+        report["policy_match"] = sig["identity"] == IDENTITY_VERIFIED and (
+            not policy.exact or claim in policy.exact or
+            (policy.trust_issuer_identities and claim is not None))
     else:
-        report["signature"] = "UNSIGNED"
-        report["facet_notes"].append("provenance is not signed")
+        report["signature_status"] = "UNSIGNED"
+        report["facet_notes"].append(
+            "provenance is unsigned: builder identity is self-asserted, "
+            "not authenticated")
 
-    # trusted only when: digest matches AND provenance present AND (if signed)
-    # signature valid AND identity passes policy
-    sig_ok = report["signature"] in (CONTENT_VALID, "UNSIGNED") and \
-        (report["signing_identity"] in (IDENTITY_VERIFIED, UNAUTHENTICATED)
-         or report["signing_identity"] is None)
-    report["trusted"] = bool(report["digest_match"] and
-                             report["provenance_present"] and sig_ok)
+    # authenticated builder = the SIGNER is verified AND equals the claim
+    report["authenticated_builder"] = bool(
+        report["authenticated_identity"] and report["policy_match"] and
+        envelope is not None and envelope.get("identity") == claimed_builder)
+
+    report["trusted"] = bool(
+        report["digest_match"] and report["provenance_present"] and
+        report["authenticated_builder"])
     return report
 
 

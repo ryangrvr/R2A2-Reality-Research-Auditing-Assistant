@@ -1,8 +1,11 @@
 """CI-native verification: non-interactive, meaningful exit codes.
 
-Pipeline: schema validation → doctor → compile → freeze → execution-context
-verification → run → audit → replication verification → attestation
-verification → transfer audit → artifact verification.
+ACTUAL pipeline (v0.5.1 — this list matches the implementation exactly):
+doctor → compile+freeze → enforced run → audit → optional attestation
+verification. Replication verification, transfer audit and artifact
+verification are NOT yet in this pipeline; they are separate CLI steps
+(`r2a2 replicate`, `r2a2 transfer`, `r2a2 verify`). Do not claim here what
+the pipeline does not execute.
 
 Exit codes distinguish failure KINDS (never conflated):
     0  all checks passed

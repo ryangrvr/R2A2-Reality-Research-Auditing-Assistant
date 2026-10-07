@@ -54,7 +54,8 @@ about certifying scientific correctness.
 
 | Attack | Mitigation and residual risk |
 |---|---|
-| Malicious in-process plugin | Explicitly stated: in-process plugins have FULL Python-process power. Only mitigation is the plugin trust policy and review; there is NO in-process sandbox. Use isolated execution for untrusted code. |
+| Malicious in-process plugin | Explicitly stated: in-process plugins have FULL Python-process power. Only mitigation is the plugin trust policy and review; there is NO in-process sandbox. Use `untrusted-subprocess` for untrusted code — but note it is NOT containment (next row). |
+| Malicious subprocess plugin with direct OS access | `untrusted-subprocess` provides process separation and protocol grants, NOT hostile-code containment: the plugin can `open()`/socket anything the OS permits (proven by test_gate6_hostile_direct_access_documented). Real containment requires an OS/container sandbox — explicitly out of scope for v0.5. |
 | Malicious compute backend | Backend capability metadata is inspected; arbitrary backends still execute arbitrary code. Treat backends as trusted code. |
 | Malicious package dependency | Outside R2A2's control; mitigated by lock files, SLSA provenance of the *release*, and standard supply-chain tooling — not by R2A2 itself. |
 | Compromised developer workstation | Keys/identities on the workstation are game. Sigstore keyless limits long-lived key theft but the OIDC session is the boundary. |

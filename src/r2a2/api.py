@@ -30,6 +30,9 @@ PARAM_KINDS = (
     "sector-input",         # parameter specific to one sector
 )
 
+ASSUMPTION_KINDS = ("assumption", "commitment", "identifying")
+TEST_KINDS = ("identity", "hostile-control", "comparator", "holdout", "custom")
+
 EVIDENCE_GRADES = (
     "theorem",              # proved
     "formal",               # formal / perturbative result, not fully rigorous

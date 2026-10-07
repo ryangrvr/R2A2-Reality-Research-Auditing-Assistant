@@ -22,6 +22,18 @@ def predictive_half_life(T=T_OBS, n=N_DECAYS, **_):
     return {"half_life_mean": math.log(2.0) / mean_lambda}
 
 
+def _expt_identity(T=T_OBS, n=N_DECAYS):
+    return {"shape_over_rate_minus_lambda": (n / T) - (N_DECAYS / T_OBS)}
+
+
+def _expt_hostile():
+    return {"posterior_width_n0": float("inf"), "concentrated": False}
+
+
+def _null_model():
+    return {"half_life": None}
+
+
 THEORY = Theory(
     id="bayesian-decay",
     version="0.1.0",
@@ -42,7 +54,7 @@ THEORY = Theory(
     sources={"decay-counts": "synthetic decay counts: n decays over time T"},
     comparators=[
         Comparator("constant-hazard-null", "null model: hazard varies uniformly, "
-                   "predicting no specific half-life", model=lambda: {"half_life": None}),
+                   "predicting no specific half-life", model=_null_model),
     ],
     predictions=[
         Prediction("P-half-life", "posterior mean half-life is ln(2)*T/n ≈ 0.1",
@@ -62,9 +74,7 @@ THEORY = Theory(
     ],
     experiments={
         "posterior": predictive_half_life,
-        "identity": lambda T=T_OBS, n=N_DECAYS: {
-            "shape_over_rate_minus_lambda": (n / T) - (N_DECAYS / T_OBS),
-        },
-        "hostile": lambda: {"posterior_width_n0": float("inf"), "concentrated": False},
+        "identity": _expt_identity,
+        "hostile": _expt_hostile,
     },
 )

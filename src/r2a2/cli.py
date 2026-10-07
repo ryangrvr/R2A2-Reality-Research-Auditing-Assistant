@@ -255,6 +255,218 @@ def cmd_theories(args) -> int:
     return 0
 
 
+
+def cmd_schema_json(args) -> int:
+    from .schema_json import build_schema
+    import json
+    print(json.dumps(build_schema(), indent=2))
+    return 0
+
+
+def cmd_validate_artifact(args) -> int:
+    from .schema_json import validate_artifact, schema_version_check
+    with open(args.file) as f:
+        doc = json.load(f)
+    errors = schema_version_check(doc) + validate_artifact(doc, kind=args.type)
+    if errors:
+        for e in errors:
+            print(f"X {e}")
+        return 1
+    print(f"{args.file}: valid against the public schema ({args.type})")
+    return 0
+
+
+def _full_export_data(theory):
+    """Assemble manifest + results + bindings for exports."""
+    m, led = compile_theory(theory, seeds={"default": 0})
+    m.freeze()
+    from .runner import run_manifest
+    res = run_manifest(theory, m, led)
+    from .transport import theory_to_dict
+    return theory_to_dict(theory), m.to_dict(), res.records
+
+
+def cmd_export_rocrate(args) -> int:
+    from .rocrate import export_rocrate, crate_to_files
+    theory_dict, manifest_dict, records = _full_export_data(_load_theory(args.theory))
+    crate = export_rocrate(
+        theory_dict, manifest_dict, records,
+        authors=args.author or [], code_revision=args.revision or "")
+    files = crate_to_files(crate)
+    import os
+    os.makedirs(args.output, exist_ok=True)
+    for path, content in files.items():
+        full = os.path.join(args.output, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write(content)
+    print(f"RO-Crate written to {args.output}/ ({len(files)} files)")
+    return 0
+
+
+def cmd_export_prov(args) -> int:
+    from .prov_export import export_prov
+    import json
+    theory_dict, manifest_dict, records = _full_export_data(_load_theory(args.theory))
+    prov = export_prov(theory_dict, manifest_dict, records,
+                       authors=args.author or [], code_revision=args.revision or "")
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(prov, f, indent=2)
+        print(f"PROV document written to {args.output}")
+    else:
+        print(json.dumps(prov, indent=2))
+    return 0
+
+
+def cmd_init_project(args) -> int:
+    import os
+    os.makedirs(args.dir, exist_ok=True)
+    for sub in ("data", "tests"):
+        os.makedirs(os.path.join(args.dir, sub), exist_ok=True)
+    theory = """\"\"\"My theory project. Edit every part of this file.\"\"\"
+from r2a2.api import Theory, Parameter, Assumption, Prediction, Test, Comparator
+
+def measure(**kw):
+    # replace with your real computation; must return a machine-readable dict
+    return {"observable": 0.0}
+
+def identity_check(**kw):
+    return {"residual": 0.0}
+
+THEORY = Theory(
+    id="my-theory",
+    version="0.0.1",
+    description="What does your theory claim?",
+    validity_domain="Under what conditions does it hold?",
+    parameters=[
+        # kind: commitment | imported-constant | fitted-parameter | external-prior | sector-input
+        Parameter("alpha", kind="commitment", value=1.0),
+    ],
+    assumptions=[
+        Assumption("A1", "state the assumption precisely", kind="assumption", priced=True),
+    ],
+    comparators=[Comparator("null-model", "what existing model are you comparing against?")],
+    predictions=[
+        Prediction(
+            "P1", "what do you predict, quantitatively?",
+            experiment="measure", observable="observable",
+            kill_condition="what observed result would prove you wrong?",
+            assumptions=["A1"], parameters=["alpha"],
+            evidence_grade="numerical", comparator="null-model"),
+    ],
+    tests=[
+        Test("T-identity", kind="identity", experiment="identity_check", exact=True,
+             description="an exact check of the numerical pipeline"),
+        # add a hostile control: a test designed to FAIL if a confounder explains P1
+    ],
+    experiments={"measure": measure, "identity_check": identity_check},
+    sources={"my-source": "where did your parameter values/inputs come from?"},
+)
+"""
+    with open(os.path.join(args.dir, "theory.py"), "w") as f:
+        f.write(theory)
+    with open(os.path.join(args.dir, "README.md"), "w") as f:
+        f.write("""# My theory project
+
+Start by editing `theory.py`. Then:
+
+    r2a2 doctor .
+    r2a2 compile theory.theory:THEORY
+    r2a2 run theory.theory:THEORY
+    r2a2 audit theory.theory:THEORY
+
+R2A2 verifies discipline, not truth: a passing audit means your claims are
+well-provenanced and falsifiable, not that your theory is correct.
+""")
+    with open(os.path.join(args.dir, "r2a2.toml"), "w") as f:
+        f.write('[project]\nname = "my-theory"\nr2a2_schema = "%s"\n' % __import__("r2a2.schema", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION)
+    print(f"project scaffolded in {args.dir}/ — run: r2a2 doctor {args.dir}")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    import importlib, sys, os
+    sys.path.insert(0, args.project)
+    mod_name = args.module or "theory"
+    mod = importlib.import_module(mod_name)
+    theory = getattr(mod, "THEORY", None)
+    if theory is None:
+        print(f"X no THEORY found in {mod_name}")
+        return 1
+    from .doctor import run_doctor
+    findings = run_doctor(theory)
+    counts = {}
+    for cat, msg in findings:
+        counts[cat] = counts.get(cat, 0) + 1
+        print(f"[{cat}] {msg}")
+    print("-" * 70)
+    print(f"{len(findings)} findings: " + ", ".join(f"{k}: {v}" for k, v in counts.items()))
+    if any(cat == "BLOCKING" for cat, _ in findings):
+        return 1
+    return 0
+
+
+def cmd_inspect(args) -> int:
+    import json
+    with open(args.artifact) as f:
+        doc = json.load(f)
+    if "theory_id" in doc and "hash" in doc:       # execution manifest
+        print(f"manifest for {doc['theory_id']} v{doc.get('theory_version')}")
+        print(f"  manifest hash:       {doc.get('hash')}")
+        print(f"  declaration hash:    {doc.get('theory_declaration_hash')}")
+        print(f"  backend:             {doc.get('backend')}")
+        for name, b in doc.get("experiment_bindings", {}).items():
+            print(f"  experiment {name}: {b.get('ref')} [{str(b.get('source_hash'))[:12]}]")
+    elif "result_hash" in doc:                      # result record
+        print(f"result {doc.get('experiment')}")
+        print(f"  result hash:    {doc.get('result_hash')}")
+        print(f"  manifest hash:  {doc.get('manifest_hash')}")
+        print(f"  value:          {json.dumps(doc.get('result'))}")
+    elif "record_hash" in doc:                      # replication record
+        print(f"replication of {doc.get('test_id')}")
+        print(f"  agrees:               {doc.get('agrees')}")
+        print(f"  independence level:   {doc.get('independence_level')}")
+        print(f"  record hash:          {doc.get('record_hash')}")
+    elif "seal" in doc:                             # attestation
+        print(f"attestation by {doc.get('reviewer')}")
+        print(f"  scope:          {doc.get('scope')}")
+        print(f"  verdict:        {doc.get('verdict')}")
+        print(f"  issues:         {doc.get('issues') or 'none'}")
+        print(f"  seal:           {str(doc.get('seal'))[:16]}…")
+    else:
+        print(json.dumps(doc, indent=2)[:2000])
+    return 0
+
+
+def cmd_verify(args) -> int:
+    """Validate schema + hashes + attestations without executing."""
+    import json
+    from .schema_json import validate_artifact, schema_version_check
+    from .trust import ReviewAttestation, verify_attestation
+    from .transport import theory_from_dict
+    ok = True
+    with open(args.artifact) as f:
+        doc = json.load(f)
+    errors = schema_version_check(doc) + validate_artifact(doc, kind=args.type)
+    for e in errors:
+        print(f"X {e}"); ok = False
+    if "seal" in doc:
+        att = ReviewAttestation(
+            reviewer=doc["reviewer"], scope=doc["scope"],
+            manifest_hash=doc["manifest_hash"], result_hash=doc["result_hash"],
+            code_revision=doc["code_revision"], verdict=doc["verdict"],
+            notes=doc.get("notes", ""), issues=doc.get("issues", []))
+        res = verify_attestation(att, doc["manifest_hash"], doc["result_hash"],
+                                 doc["code_revision"], sealed_as=doc["seal"])
+        print(f"attestation seal: {'intact' if res['seal_intact'] else 'BROKEN'}; "
+              f"applies: {res['applies']}")
+        ok = ok and res["applies"]
+    if ok:
+        print(f"{args.artifact}: verified (no execution performed)")
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="r2a2", description=__doc__)
     p.add_argument("--version", action="version", version=f"r2a2 {__version__}")
@@ -329,9 +541,48 @@ def main(argv=None) -> int:
     s.add_argument("--revision", required=True)
     s.set_defaults(fn=cmd_verify_attestation)
 
-    s = sub.add_parser("schema", help="print the R2A2 schema version")
-    s.set_defaults(fn=cmd_schema)
+    s = sub.add_parser("schema", help="print the R2A2 schema version; --json for the public JSON Schema")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=lambda a: cmd_schema_json(a) if a.json else cmd_schema(a))
 
+
+    s = sub.add_parser("validate-artifact", help="validate a JSON artifact against the public schema")
+    s.add_argument("file")
+    s.add_argument("--type", default="auto")
+    s.set_defaults(fn=cmd_validate_artifact)
+
+    s = sub.add_parser("export-rocrate", help="export a research object (RO-Crate)")
+    s.add_argument("theory")
+    s.add_argument("-o", "--output", default="ro-crate")
+    s.add_argument("--author", action="append")
+    s.add_argument("--revision", default="")
+    s.set_defaults(fn=cmd_export_rocrate)
+
+    s = sub.add_parser("export-prov", help="export W3C PROV provenance")
+    s.add_argument("theory")
+    s.add_argument("-o", "--output", default=None)
+    s.add_argument("--author", action="append")
+    s.add_argument("--revision", default="")
+    s.set_defaults(fn=cmd_export_prov)
+
+    s = sub.add_parser("init-project", help="scaffold a full external-user theory project")
+    s.add_argument("dir")
+    s.set_defaults(fn=cmd_init_project)
+
+    s = sub.add_parser("doctor", help="diagnose a project in plain scientific language")
+    s.add_argument("project")
+    s.add_argument("--module", default="theory")
+    s.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("inspect", help="inspect someone else's artifact (no Python needed)")
+    s.add_argument("artifact")
+    s.add_argument("--type", default="auto")
+    s.set_defaults(fn=cmd_inspect)
+
+    s = sub.add_parser("verify", help="verify an artifact's hashes/schema/attestations without executing")
+    s.add_argument("artifact")
+    s.add_argument("--type", default="auto")
+    s.set_defaults(fn=cmd_verify)
     s = sub.add_parser("import-theory",
                        help="validate a theory from YAML/JSON transport")
     s.add_argument("file")

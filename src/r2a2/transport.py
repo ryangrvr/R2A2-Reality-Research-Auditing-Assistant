@@ -175,7 +175,8 @@ def theory_from_yaml(text: str) -> Theory:
 
 def theory_to_dict(theory: Theory) -> Dict[str, Any]:
     """Canonical serialization of a Theory (round-trips through from_dict)."""
-    return {
+    from .schema import stamp
+    return stamp({
         "id": theory.id,
         "version": theory.version,
         "description": theory.description,
@@ -195,16 +196,16 @@ def theory_to_dict(theory: Theory) -> Dict[str, Any]:
                          "parameters": list(p.parameters),
                          "evidence_grade": p.evidence_grade,
                          "sector": p.sector, "comparator": p.comparator}
-                        for p in theory.predictions],
-            "tests": [{"id": t.id, "kind": t.kind, "experiment": t.experiment,
-                       "description": t.description, "exact": t.exact,
-                       "comparator": t.comparator, "preregistered": t.preregistered}
-                      for t in theory.tests],
+                                         for p in theory.predictions],
+                        "tests": [{"id": t.id, "kind": t.kind, "experiment": t.experiment,
+                                   "description": t.description, "exact": t.exact,
+                                   "comparator": t.comparator, "preregistered": t.preregistered}
+                                  for t in theory.tests],
             # general transformations (invariance declarations)
             # experiments: executable code travels as module:qualname references
-        "experiments": {name: _ref(fn) for name, fn in
-                        sorted(theory.experiments.items())},
-        "transformations": [dict(tr) for tr in theory.transformations],
+            "experiments": {name: _ref(fn) for name, fn in
+                            sorted(theory.experiments.items())},
+            "transformations": [dict(tr) for tr in theory.transformations],
             # transformation classes: hooks serialized as stable code references
             "transformation_classes": [
                 {"id": tc.id, "description": tc.description,
@@ -218,4 +219,4 @@ def theory_to_dict(theory: Theory) -> Dict[str, Any]:
                 {"id": c.id, "description": c.description,
                  "model": _ref(c.model), "source": c.source}
                 for c in theory.comparators],
-        }
+        })

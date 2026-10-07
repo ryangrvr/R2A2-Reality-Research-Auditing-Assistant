@@ -163,6 +163,14 @@ def main():
         if not any(path == g[5:] or path.startswith(g[5:] + os.sep)
                    for g in grants if g.startswith("read:")):
             sys.stdout.write(json.dumps(
+                {"ok": False,
+                 "error": f"capability refused: read {path} not declared"}))
+            return
+            # refusal is the runner protocol; NOTE (honest limitation, see
+            # THREAT_MODEL.md): opens inside plugin code are not intercepted
+            # by Python-level checks in v0.5 — refusal applies to declared
+            # runner-mediated reads.
+            sys.stdout.write(json.dumps(
                 {"ok": False, "error": f"capability refused: read {path} not declared"}))
             return
     try:
@@ -195,18 +203,38 @@ class IsolatedExecutor:
     def run(self, entry: str, manifest: PluginManifest,
             args: Dict[str, Any] = None,
             read_paths: List[str] = None,
-            timeout: int = 120) -> Dict[str, Any]:
+            timeout: int = 120,
+            module_paths: List[str] = None) -> Dict[str, Any]:
         refused = [c for c in manifest.capabilities if c in REFUSED_DEFAULT]
+        # ENFORCEMENT (v0.5): any path-typed argument must be covered by a
+        # declared read grant, and grants only exist for ISOLATABLE
+        # capabilities that the manifest actually declares. This is the
+        # runner-protocol enforcement point; see THREAT_MODEL.md for the
+        # honest limitation about opens inside plugin code.
+        args = args or {}
+        grants = set(read_paths or []) if {CAP_READ_INPUT, CAP_READ_DATASET} & set(manifest.capabilities) else set()
+        for value in args.values():
+            if isinstance(value, str) and ("/" in value or value.endswith(".txt") \
+                                           or os.path.exists(value)):
+                if not any(value == g or value.startswith(g + os.sep)
+                           for g in grants):
+                    return {"ok": False,
+                            "error": f"capability refused: read {value} not declared"}
         req = {
             "entry": entry,
             "args": args or {},
             "capabilities": [f"read:{p}" for p in (read_paths or [])],
             "read_paths": read_paths or [],
         }
+        env = dict(os.environ)
+        # only EXPLICITLY DECLARED module paths are added to the subprocess;
+        # the sandbox cwd itself is not implicitly trusted
+        env["PYTHONPATH"] = os.pathsep.join(
+            module_paths or []) + os.pathsep + env.get("PYTHONPATH", "")
         proc = subprocess.run(
             [sys.executable, self._runner],
             input=json.dumps(req), capture_output=True, text=True,
-            timeout=timeout, cwd=self.workspace)
+            timeout=timeout, cwd=self.workspace, env=env)
         try:
             resp = json.loads(proc.stdout)
         except json.JSONDecodeError:

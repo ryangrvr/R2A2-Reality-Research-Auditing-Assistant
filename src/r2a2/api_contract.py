@@ -32,7 +32,14 @@ def check_plugin_api(plugin_module) -> List[str]:
     """Verify a plugin uses only the supported API. Returns violations."""
     violations: List[str] = []
     seen = set()
-    for name, obj in vars(plugin_module).items():
+    items = plugin_module.items() if isinstance(plugin_module, dict) \
+        else vars(plugin_module).items()
+    for name, obj in items:
+        try:
+            if not hasattr(obj, "__dict__"):
+                continue
+        except Exception:
+            continue
         mod = getattr(obj, "__module__", None)
         if mod and mod.startswith("r2a2") and mod not in API_MODULES:
             violations.append(

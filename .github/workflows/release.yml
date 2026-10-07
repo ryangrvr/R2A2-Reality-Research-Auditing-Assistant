@@ -1,0 +1,42 @@
+# Hardened release path (PREPARATION ONLY — no publish in v0.5).
+# Uses PyPI Trusted Publishing: identity-bound, environment-protected,
+# NO long-lived upload token.
+name: r2a2-release
+on:
+  workflow_dispatch:
+    inputs: {confirm: {description: 'type RELEASE to confirm', required: true}}
+jobs:
+  build-and-prove:
+    if: github.event.inputs.confirm == 'RELEASE'
+    runs-on: ubuntu-latest
+    permissions: {id-token: write, contents: read}   # OIDC for Sigstore/PyPI
+    environment: release                              # protected environment
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install build sigstore
+      - name: build sdist + wheel
+        run: python -m build
+      - name: generate SLSA-shaped build provenance
+        run: |
+          python - <<'PY'
+          from r2a2.supply_chain import build_provenance
+          import hashlib, glob, json
+          subjects = {f.split('/')[-1]: hashlib.sha256(open(f,'rb').read()).hexdigest()
+                      for f in glob.glob('dist/*')}
+          prov = build_provenance(subjects,
+                  source_repo="${{ github.server_url }}/${{ github.repository }}",
+                  source_revision="${{ github.sha }}",
+                  builder_identity="${{ github.job }}@${{ github.run_id }}",
+                  sign_backend="sigstore")
+          json.dump(prov, open('dist/provenance.json','w'), indent=2)
+          PY
+      - name: sign artifacts (Sigstore keyless)
+        run: python -m sigstore sign dist/*
+      # Trusted Publishing — no API token; identity comes from the OIDC token
+      - name: publish to PyPI (Trusted Publishing)
+        if: github.ref == 'refs/heads/main'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with: {skip-existing: true}

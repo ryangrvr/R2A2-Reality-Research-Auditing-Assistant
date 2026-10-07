@@ -45,6 +45,10 @@ def ci_verify(theory: Theory, policy=None, signed_attestations=None) -> tuple:
             steps.append({"step": name, "ok": True, "detail": detail})
         except Exception as exc:
             kind = classify(exc)
+            # structural findings (doctor/compile) are protocol failures —
+            # the process/provenance discipline broke, not the hardware
+            if name in ("doctor", "compile", "audit", "attestations"):
+                kind = FailureKind.PROTOCOL
             exit_for = {FailureKind.EXECUTION: EXIT_EXECUTION,
                         FailureKind.PROTOCOL: EXIT_PROTOCOL,
                         FailureKind.THEORY: EXIT_THEORY}.get(kind, EXIT_TRUST)

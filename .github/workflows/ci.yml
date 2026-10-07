@@ -1,0 +1,18 @@
+# CI-native verification (provider-neutral CLI; this is the GitHub example)
+name: r2a2-verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e .
+      # non-interactive; failure kinds map to distinct exit codes
+      # (2 execution, 3 protocol, 4 theory, 5 trust)
+      - name: compile → audit → run → replicate → verify
+        run: |
+          PYTHONPATH=examples:examples/toy_theory:examples/corpus \
+            r2a2 ci verify toy_theory
+          PYTHONPATH=examples:examples/corpus r2a2 ci verify two_body

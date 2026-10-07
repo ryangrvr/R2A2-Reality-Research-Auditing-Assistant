@@ -38,9 +38,15 @@ def test_yaml_transport_round_trip():
     t2 = theory_from_dict(d)
     assert canonical_hash(theory_to_dict(t2)) == canonical_hash(d)
     assert t2.id == t.id and len(t2.predictions) == len(t.predictions)
-    # Experiments are code (callables) and are transported by reference in a
-    # real project; the declarative half round-trips and hashes identically.
-    assert t2.validity_domain == t.validity_domain
+    # the declarative half round-trips; experiments are code and resolve by
+    # reference (module:experiment name) when transported — here we re-attach
+    # them explicitly to verify the full theory compiles to the SAME manifest
+    # hash as the original
+    from r2a2.api import Theory
+    t2.experiments = dict(t.experiments)
+    m1, l1 = compile_theory(t); m1.freeze()
+    m2, l2 = compile_theory(t2); m2.freeze()
+    assert m1.hash == m2.hash
 
 
 def test_transport_rejects_incomplete():

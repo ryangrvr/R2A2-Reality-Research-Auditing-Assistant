@@ -1,3 +1,42 @@
+# R2A2 v0.3.2 — executable provenance closure
+
+## External review of v0.3.1 (commit d02bdf9)
+
+**Verdict: `d02bdf9` — checked: ChatGPT — ISSUE FOUND.** The four original
+v0.3 trust defects are closed by `894f3b0`; follow-up closure review found
+three residual issues: (1) executable implementations bound by
+`module.qualname` rather than source/content hash — same-name body edits
+did not alter manifest identity; (2) replication `record_hash` excluded the
+derived `agrees`/`detail` verdict fields, with no recompute verifier;
+(3) transport still omitted experiments (manual reattachment) and hook
+resolution was not robust to dotted package modules.
+
+## Closure (commit 2424f16) — acceptance conditions met
+
+1. **Executables bound by content, not name.** Every experiment and hook in
+   the manifest carries `code_binding = {ref, source_hash}` where `ref` is
+   `module:qualname` and `source_hash` is the canonical hash of the
+   callable's source (module-source fallback; unbindable builtins declared
+   as `""`). Acceptance test: edit a function body without renaming → the
+   declaration hash AND manifest hash change, with the ref identical.
+2. **Replication verdict is inside the hash.** `evaluate()` now computes the
+   verdict first, hashes the complete evaluated record, and adds only the
+   hash afterward. `verify_replication_record()` recomputes the verdict from
+   the bound rule + values and rejects stored records whose `agrees`/`detail`
+   disagree or whose content no longer matches the hash. Acceptance test:
+   flipping a stored `agrees` or editing a value under the same hash fails.
+3. **Lossless executable transport + dotted-package references.**
+   Experiments serialize as `module:qualname` references and resolve at load
+   time; hook resolution parses the colon syntax, so installed plugins like
+   `my_package.models.gravity:solve` work. Ambiguous qualnames (multiple
+   lambdas) fail loudly, never guess. All example theories now use named
+   experiment functions. Acceptance test: a synthetic dotted-package theory
+   round-trips to the same executable binding (`is` identity).
+
+101 tests pass. Examples now demonstrate the discipline: name your hooks.
+
+---
+
 # R2A2 v0.3.1 — trust closure
 
 ## External review of v0.3 (commit c83df63)

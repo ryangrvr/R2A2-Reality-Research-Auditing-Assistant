@@ -37,6 +37,19 @@ def _require(d: dict, key: str, ctx: str):
     return d[key]
 
 
+def _ref(fn) -> str:
+    """Stable reference for a hook callable: 'module.qualname'.
+
+    Executable pieces travel as references, not embedded code; the loader
+    resolves them at import time. None serializes as ''.
+    """
+    if fn is None:
+        return ""
+    mod = getattr(fn, "__module__", None)
+    qual = getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn)))
+    return f"{mod}.{qual}" if mod else str(qual)
+
+
 def theory_from_dict(d: Dict[str, Any]) -> Theory:
     """Build a Theory from a plain mapping (already-parsed YAML/JSON)."""
     ctx = d.get("id", "<theory>")
@@ -86,19 +99,63 @@ def theory_from_dict(d: Dict[str, Any]) -> Theory:
             description=t.get("description", ""),
             exact=bool(t.get("exact", False)),
             comparator=t.get("comparator"),
+            preregistered=bool(t.get("preregistered", True)),
         ))
+    theory.transformations = [dict(tr) for tr in d.get("transformations", [])]
     for tc in d.get("transformation_classes", []):
         theory.transformation_classes.append(TransformationClass(
             id=str(_require(tc, "id", ctx)),
             description=tc.get("description", ""),
+            **{k: _resolve(tc.get(k)) for k in
+               ("is_member", "compose", "canonicalize", "invariants",
+                "quotient_distance", "optimise")},
         ))
     for c in d.get("comparators", []):
         theory.comparators.append(Comparator(
             id=str(_require(c, "id", ctx)),
             description=c.get("description", ""),
+            model=_resolve(c.get("model")),
             source=c.get("source"),
         ))
     return theory
+
+
+def _resolve(ref: str, expect_class=False):
+    """Resolve a 'module.qualname' hook reference back to a callable.
+
+    Empty string or missing → None. Qualname path is tried first; if the
+    callable is a lambda or nested closure (no stable attribute path), the
+    declaring module's namespace is searched for an identity match. This is
+    how executable pieces travel: by stable reference, resolved at load time.
+    """
+    if not ref:
+        return None
+    import importlib
+    import inspect
+    module_name, _, qual = ref.partition(".")
+    try:
+        mod = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ProtocolError(f"cannot resolve hook reference {ref!r}: {exc}") from exc
+    # try the attribute path
+    try:
+        obj = mod
+        for part in qual.split("."):
+            obj = getattr(obj, part)
+        return obj
+    except AttributeError:
+        pass
+    # fallback: identity search in the module namespace (lambdas, closures).
+    # Ambiguous references (several <lambda>s) must FAIL, never guess.
+    matches = [v for v in vars(mod).values()
+               if callable(v) and getattr(v, "__qualname__", None) == qual]
+    if len(matches) == 1:
+        return matches[0]
+    raise ProtocolError(
+        f"cannot resolve hook reference {ref!r} "
+        + (f"({len(matches)} candidates with that qualname; name the function)"
+           if matches else "(not found)")
+        + " — the declaring module must be importable at load time")
 
 
 def theory_from_yaml(text: str) -> Theory:
@@ -129,7 +186,23 @@ def theory_to_dict(theory: Theory) -> Dict[str, Any]:
                          "evidence_grade": p.evidence_grade,
                          "sector": p.sector, "comparator": p.comparator}
                         for p in theory.predictions],
-        "tests": [{"id": t.id, "kind": t.kind, "experiment": t.experiment,
-                   "description": t.description, "exact": t.exact,
-                   "comparator": t.comparator} for t in theory.tests],
-    }
+            "tests": [{"id": t.id, "kind": t.kind, "experiment": t.experiment,
+                       "description": t.description, "exact": t.exact,
+                       "comparator": t.comparator, "preregistered": t.preregistered}
+                      for t in theory.tests],
+            # general transformations (invariance declarations)
+            "transformations": [dict(tr) for tr in theory.transformations],
+            # transformation classes: hooks serialized as stable code references
+            "transformation_classes": [
+                {"id": tc.id, "description": tc.description,
+                 "is_member": _ref(tc.is_member), "compose": _ref(tc.compose),
+                 "canonicalize": _ref(tc.canonicalize), "invariants": _ref(tc.invariants),
+                 "quotient_distance": _ref(tc.quotient_distance),
+                 "optimise": _ref(tc.optimise)}
+                for tc in theory.transformation_classes],
+            # comparators: model as stable code reference
+            "comparators": [
+                {"id": c.id, "description": c.description,
+                 "model": _ref(c.model), "source": c.source}
+                for c in theory.comparators],
+        }

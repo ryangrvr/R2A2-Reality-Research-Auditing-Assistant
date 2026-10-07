@@ -208,13 +208,18 @@ def cmd_verify_attestation(args) -> int:
     from .trust import ReviewAttestation, verify_attestation
     with open(args.attestation) as f:
         doc = json.load(f)
+    if "seal" not in doc:
+        print("X attestation file has no seal; it cannot be verified")
+        return 1
     att = ReviewAttestation(
         reviewer=doc["reviewer"], scope=doc["scope"],
         manifest_hash=doc["manifest_hash"], result_hash=doc["result_hash"],
         code_revision=doc["code_revision"], verdict=doc["verdict"],
         notes=doc.get("notes", ""), issues=doc.get("issues", []))
+    # ALWAYS verify the current content against the STORED seal: any edit to
+    # verdict, notes or issue state after sealing is detected here.
     res = verify_attestation(att, args.manifest_hash, args.result_hash,
-                             args.revision)
+                             args.revision, sealed_as=doc["seal"])
     print(json.dumps(res, indent=2))
     return 0 if res["applies"] else 1
 

@@ -32,6 +32,10 @@ def quotient_distance(sign1, theta1, sign2, theta2):
     return min(d_same, d_flip)
 
 
+def _compose(s1, s2):
+    return s1 * s2
+
+
 def is_member(sign):
     return sign in (1, -1)
 
@@ -42,7 +46,7 @@ GAUGE = TransformationClass(
                 "unphysical. Two states are gauge-equivalent iff they differ "
                 "by a sign flip.",
     is_member=is_member,
-    compose=lambda s1, s2: s1 * s2,
+    compose=_compose,
     canonicalize=canonicalize,
     quotient_distance=quotient_distance,
 )

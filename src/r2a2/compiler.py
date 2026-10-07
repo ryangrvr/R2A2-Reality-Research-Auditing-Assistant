@@ -55,6 +55,14 @@ class ExecutionManifest:
     thresholds: Dict[str, Any] = field(default_factory=dict)
     datasets: Dict[str, str] = field(default_factory=dict)  # dataset id -> hash
     r2a2_schema: str = ""
+    # binds the FULL scientific declaration (assumption texts, kill conditions,
+    # comparator definitions, transformation classes, test definitions,
+    # preregistration flags) — not just the ID lists
+    theory_declaration_hash: str = ""
+    # code-binding references: experiment name -> (module, qualname) so the
+    # implementing code is pinned to the manifest
+    experiment_refs: Dict[str, str] = field(default_factory=dict)
+    transformation_refs: Dict[str, str] = field(default_factory=dict)
     seeds: Dict[str, int] = field(default_factory=dict)
     backend: str = "local"
     environment: Dict[str, str] = field(default_factory=dict)
@@ -81,6 +89,16 @@ class ExecutionManifest:
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
+
+
+def _code_ref(fn) -> str:
+    """Stable reference to a callable: module.qualname (code is pinned by
+    reference + hash at execution time, not embedded in the manifest)."""
+    if fn is None:
+        return ""
+    mod = getattr(fn, "__module__", None)
+    qual = getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn)))
+    return f"{mod}.{qual}" if mod else str(qual)
 
 
 def compile_theory(theory: Theory, backend: str = "local",
@@ -139,6 +157,27 @@ def compile_theory(theory: Theory, backend: str = "local",
         ledger.add(f"test:{t.id}", "test", experiment=t.experiment,
                    test_kind=t.kind, exact=t.exact, preregistered=t.preregistered)
 
+    # --- full scientific declaration hash -------------------------------
+    # Uses the canonical transport serialization of the declarative model,
+    # plus code references for the executable hooks. Changing ANY scientific
+    # semantic field (kill condition, assumption text, transformation class,
+    # preregistration flag, comparator...) changes this hash.
+    from .transport import theory_to_dict
+    decl = theory_to_dict(theory)
+    decl["experiments_refs"] = {
+        name: _code_ref(fn) for name, fn in sorted(theory.experiments.items())
+    }
+    decl["transformation_class_refs"] = {
+        tc.id: _code_ref(tc) for tc in theory.transformation_classes
+    }
+    decl["comparator_refs"] = {
+        c.id: _code_ref(c.model) if c.model else "" for c in theory.comparators
+    }
+    declaration_hash = canonical_hash(decl)
+
+    experiment_refs = {name: _code_ref(fn) for name, fn in theory.experiments.items()}
+    transformation_refs = {tc.id: _code_ref(tc) for tc in theory.transformation_classes}
+
     env = {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
@@ -155,5 +194,8 @@ def compile_theory(theory: Theory, backend: str = "local",
         backend=backend,
         environment=env,
         r2a2_schema=SCHEMA_VERSION,
+        theory_declaration_hash=declaration_hash,
+        experiment_refs=experiment_refs,
+        transformation_refs=transformation_refs,
     )
     return manifest, ledger

@@ -91,17 +91,45 @@ class Replication:
             return INDEPENDENCE_LEVELS[0]
         return INDEPENDENCE_LEVELS[1]
 
-    def evaluate(self) -> Dict[str, Any]:
-        agrees, detail = self.rule.check(self.value_a, self.value_b)
+    def to_record(self) -> dict:
+        """Complete, content-addressable record.
+
+        Binds the frozen AgreementRule (so tolerance cannot be changed after
+        seeing results), both implementations' derivation references and code
+        hashes, the independence claims, and the values compared. The
+        independence level is a **declared and evidenced grade**: R2A2 records
+        the claim and its evidence; it cannot verify derivation independence
+        from strings alone.
+        """
         return stamp({
             "test_id": self.test_id,
-            "agrees": agrees,
-            "detail": detail,
+            "rule": {"kind": self.rule.kind,
+                     "tolerance": self.rule.tolerance,
+                     "observable": self.rule.observable},
+            "impl_a": {"name": self.impl_a.name,
+                       "code_hash": self.impl_a.code_hash,
+                       "derivation_ref": self.impl_a.derivation_ref,
+                       "derived_independently": self.impl_a.derived_independently},
+            "impl_b": {"name": self.impl_b.name,
+                       "code_hash": self.impl_b.code_hash,
+                       "derivation_ref": self.impl_b.derivation_ref,
+                       "derived_independently": self.impl_b.derived_independently},
             "independence_level": self.independence_level,
-            "impl_a": {"name": self.impl_a.name, "code_hash": self.impl_a.code_hash},
-            "impl_b": {"name": self.impl_b.name, "code_hash": self.impl_b.code_hash},
+            "independence_note": ("declared and evidenced grade, not verified "
+                                  "by R2A2 from strings alone"),
+            "value_a": self.value_a, "value_b": self.value_b,
             "manifest_hash": self.manifest_hash,
         })
+
+    def evaluate(self) -> Dict[str, Any]:
+        agrees, detail = self.rule.check(self.value_a, self.value_b)
+        record = self.to_record()
+        record.update({
+            "agrees": agrees,
+            "detail": detail,
+            "record_hash": canonical_hash(record),
+        })
+        return record
 
 
 # --------------------------------------------------------------------------
@@ -122,11 +150,18 @@ class ReviewAttestation:
     issues: list = field(default_factory=list)   # open issues, if any
 
     def seal(self) -> str:
-        """Content-address the attestation itself."""
+        """Content-address the attestation.
+
+        Hashes EVERY semantically relevant field: reviewer, scope, artifact
+        hashes, revision, verdict, notes, issues AND the schema version.
+        Editing any of these — including the issue state that controls whether
+        the attestation applies — invalidates the seal.
+        """
         return canonical_hash(stamp({
             "reviewer": self.reviewer, "scope": self.scope,
             "manifest_hash": self.manifest_hash, "result_hash": self.result_hash,
             "code_revision": self.code_revision, "verdict": self.verdict,
+            "notes": self.notes, "issues": sorted(map(str, self.issues)),
         }))
 
     def covers(self, manifest_hash: str, result_hash: str,

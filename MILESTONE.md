@@ -1,3 +1,45 @@
+# R2A2 v0.4.1 — standards conformance closure
+
+## External review of v0.4 (commit e0f2dd3)
+
+**Verdict: `e0f2dd3` — checked: ChatGPT — ISSUE FOUND.** Internal adoption
+architecture strong; heterogeneous corpus passes without core special cases.
+Standards-conformance review found: (1) RO-Crate export did not satisfy
+RO-Crate 1.3 entity/reference/package requirements and declared payload files
+it did not write; (2) PROV export was PROV-shaped but not conformant
+PROV-JSON serialization; (3) the dependency-free JSON Schema fallback gave
+weaker guarantees than the public schema.
+
+## Closure — all four gates met
+
+1. **Complete attached RO-Crate.** Every entity has `@id`; relationships
+   (`hasPart`, `author`, `license`, `conformsTo`) point BY REFERENCE; root
+   includes `datePublished`; author/license are contextual entities; the
+   metadata descriptor carries `conformsTo` + `about: ./`; and **every
+   relative file entity is physically written** (`write_crate`). The CLI runs
+   `check_conformance()` on the materialized crate and fails on violations.
+   Verified live: two_body crate = metadata + theory.json + manifest.json +
+   4 result files, all declared and present.
+2. **Faithful PROV-JSON** (W3C Member Submission 2013 — stated precisely, not
+   called a Recommendation). Relations now live in TOP-LEVEL relation maps
+   (`used`, `wasGeneratedBy`, `wasDerivedFrom`, `wasAttributedTo`,
+   `wasAssociatedWith`), keyed by relation-instance id; no relation keys are
+   embedded in entity/activity records. `check_prov_conformance()` enforces
+   this shape, that every `r2a2:` reference resolves to a declared id, and
+   that required relation maps exist. The CLI validates before writing.
+3. **Fail-closed schema validation.** Without `jsonschema`, full-conformance
+   validation REFUSES and returns an explicit "FULL-SCHEMA VALIDATOR
+   REQUIRED" error; `require_full=False` is available but marks every result
+   "WARNING: partial". `standards` extra added to pyproject.
+4. **Hostile conformance tests** (7 new): missing crate payload, inline
+   hasPart entity, relation embedded in a PROV entity, unresolvable relation
+   reference, wrong scalar type, malformed callable ref — all caught.
+
+142 passed, 1 skipped (full-validator tests skip where jsonschema is absent;
+the fail-closed test verifies the refusal there).
+
+---
+
 # R2A2 v0.4 — external adoption & interoperability
 
 v0.4 question: **can an outside researcher encode, test, export, exchange and

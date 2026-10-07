@@ -38,8 +38,8 @@ from r2a2.schema_json import validate_artifact, build_schema, schema_version_che
 from r2a2.compiler import compile_theory  # noqa: E402
 from r2a2.runner import run_manifest  # noqa: E402
 from r2a2.audit import audit_theory  # noqa: E402
-from r2a2.rocrate import export_rocrate  # noqa: E402
-from r2a2.prov_export import export_prov  # noqa: E402
+from r2a2.rocrate import export_rocrate, write_crate, check_conformance  # noqa: E402
+from r2a2.prov_export import export_prov, check_prov_conformance  # noqa: E402
 from r2a2.doctor import run_doctor  # noqa: E402
 
 ALL_PROJECTS = [toy_theory.THEORY, ising_toy.THEORY, bayesian_decay.THEORY,
@@ -49,25 +49,53 @@ ALL_PROJECTS = [toy_theory.THEORY, ising_toy.THEORY, bayesian_decay.THEORY,
 
 # --- gate 1: schema validates everything ------------------------------------
 
+def _validate(doc):
+    """Validate with the strongest available validator.
+
+    If the full validator (jsonschema) is installed, require full conformance.
+    Otherwise accept explicitly-marked partial validation - this is the
+    fail-closed policy: the caller must KNOW validation is partial.
+    """
+    try:
+        import jsonschema  # noqa
+        return validate_artifact(doc)
+    except ImportError:
+        return [e for e in validate_artifact(doc, require_full=False)
+                if not e.startswith("WARNING:")]
+
+
 def test_gate1_schema_validates_all_projects():
     for t in ALL_PROJECTS:
-        errs = validate_artifact(theory_to_dict(t))
+        errs = _validate(theory_to_dict(t))
         assert errs == [], f"{t.id}: {errs[:3]}"
 
 
 def test_gate1_schema_rejects_unknown_fields_and_bad_enums():
     d = theory_to_dict(toy_theory.THEORY)
     d["not_a_real_field"] = 1
-    assert validate_artifact(d)
+    assert _validate(d)
     d2 = theory_to_dict(toy_theory.THEORY)
     d2["parameters"][0]["kind"] = "vibes"
-    assert validate_artifact(d2)
+    assert _validate(d2)
+
+
+def test_gate1_fail_closed_when_no_full_validator():
+    """Without jsonschema, require_full=True must REFUSE to claim conformance."""
+    try:
+        import jsonschema  # noqa
+        return  # full validator available; policy moot
+    except ImportError:
+        errs = validate_artifact(theory_to_dict(toy_theory.THEORY))
+        assert any("FULL-SCHEMA VALIDATOR REQUIRED" in e for e in errs)
+        partial = validate_artifact(theory_to_dict(toy_theory.THEORY),
+                                    require_full=False)
+        assert partial and partial[0].startswith("WARNING: partial")
 
 
 def test_gate1_extension_namespace_allowed():
     d = theory_to_dict(toy_theory.THEORY)
     d["x_lab_notebook"] = "our internal extension"
-    assert validate_artifact(d) == []
+    assert _validate(d) == []
 
 
 def test_gate1_round_trip_preserves_semantics():
@@ -86,25 +114,29 @@ def test_gate1_round_trip_preserves_semantics():
 
 # --- gate 2: RO-Crate export -------------------------------------------------
 
-def test_gate2_rocrate_identifies_all_five():
+def test_gate2_rocrate_identifies_all_five(tmp_path):
     t = two_body.THEORY
     m, led = compile_theory(t, seeds={"default": 0}); m.freeze()
     res = run_manifest(t, m, led)
     crate = export_rocrate(
         theory_to_dict(t), m.to_dict(), res.records,
         authors=["A. Researcher"], code_revision="336ce58")
-    root = crate["@graph"][0]
+    # conformance: root entity, proper references, datePublished
+    errs = check_conformance(crate)
+    assert errs == [], errs
+    root = next(e for e in crate["@graph"] if e["@id"] == "./")
     assert root["r2a2:manifestHash"] == m.hash
-    ids = " ".join(str(e.get("id", "")) + e.get("name", "") + e.get("description", "")
+    assert root["datePublished"]
+    # hasPart references (not inline)
+    assert all(set(h) == {"@id"} for h in root["hasPart"])
+    ids = " ".join(e.get("name", "") + e.get("description", "")
                    for e in crate["@graph"])
-    # (1) what was proposed  (2) what was assumed
     assert "Theory declaration" in ids
-    assert "kill condition" in ids or "canonical declarative" in ids.lower() \
-        or "parameters" in ids
-    # (3) what code/data executed (4) result-to-manifest linkage
     assert any(r.get("manifest_hash") == m.hash for r in res.records)
-    # (5) replication/review applicability is representable
-    assert root["r2a2:schemaVersion"]
+    # every declared file physically exists in the attached crate
+    write_crate(crate, str(tmp_path / "crate"))
+    errs = check_conformance(crate, crate_dir=str(tmp_path / "crate"))
+    assert errs == [], errs
 
 
 # --- gate 3: W3C PROV --------------------------------------------------------
@@ -115,15 +147,25 @@ def test_gate3_prov_structure():
     res = run_manifest(t, m, led)
     prov = export_prov(theory_to_dict(t), m.to_dict(), res.records,
                        authors=["P. Physicist"], reviewers=["R. Reviewer"])
+    assert check_prov_conformance(prov) == []
     assert "prefix" in prov and "prov" in prov["prefix"]
-    assert "activity" in prov and "entity" in prov and "agent" in prov
+    for relmap in ("used", "wasGeneratedBy", "wasDerivedFrom", "wasAttributedTo"):
+        assert relmap in prov, relmap
+    # relations are TOP-LEVEL maps, not embedded in entities
+    assert all("prov:used" not in e for e in prov["entity"].values())
+    assert all("prov:generated" not in a for a in prov["activity"].values())
     # result wasGeneratedBy execution; manifest derived from theory
-    run_act = prov["activity"]["r2a2:activity:run"]
-    assert run_act["prov:used"].startswith("r2a2:manifest")
-    # R2A2-specific terms stay in the r2a2 namespace, not in prov: types
+    # result wasGeneratedBy execution; manifest derived from theory
+    gen = prov["wasGeneratedBy"]
+    assert any(r["prov:activity"] == "r2a2:activity:run" for r in gen.values())
+    assert any("r2a2:result:" in str(r["prov:entity"]) for r in gen.values())
+    assert prov["wasDerivedFrom"]["r2a2:deriv:manifest-from-theory"]["prov:usedEntity"] \
+        == f"r2a2:theory:{t.id}"
+    # R2A2-specific terms stay in the r2a2 namespace
     pred = prov["entity"][f"r2a2:prediction:{t.predictions[0].id}"]
-    assert "prov:type" in pred
-    assert pred["r2a2:killCondition"]  # in the r2a2 profile, not prov:semantics
+    assert pred["r2a2:killCondition"]
+    # precise provenance-spec wording
+    assert "Member Submission" in prov["r2a2_profile"]["provenanceSpec"]
 
 
 # --- gate 4: fresh scaffold --------------------------------------------------
@@ -248,7 +290,7 @@ def test_gate7_two_body_pipeline_end_to_end(tmp_path):
     crate = export_rocrate(theory_to_dict(t), m.to_dict(), res.records,
                            replications=[record], attestations=[doc],
                            authors=["A"], code_revision="336ce58")
-    assert any("replication" in str(e) for e in crate["@graph"])
+    assert any("replication" in str(e.get("name", "")) for e in crate["@graph"])
 
 
 # --- gate 8: GRUT adapter regression ------------------------------------------

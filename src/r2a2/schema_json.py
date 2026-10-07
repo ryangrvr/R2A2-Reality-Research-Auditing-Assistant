@@ -255,12 +255,20 @@ def build_schema() -> dict:
     }
 
 
-def validate_artifact(doc: dict, kind: str = "auto") -> list:
+def validate_artifact(doc: dict, kind: str = "auto",
+                      require_full: bool = True) -> list:
     """Validate a document against the public schema.
 
-    Returns a list of error strings (empty = valid). Uses jsonschema when
-    available; otherwise a minimal built-in validator covering required/
-    enum/const/additionalProperties semantics.
+    Returns a list of error strings (empty = valid).
+
+    FAIL-CLOSED POLICY (standards conformance, v0.4.1): the dependency-free
+    fallback validator does NOT enforce every JSON Schema keyword, so it can
+    only give weaker guarantees. When ``require_full`` is set (default) and
+    the ``jsonschema`` package is not installed, this function REFUSES to
+    claim full conformance and returns an explicit error instead of silently
+    'mostly validating'. Callers who knowingly accept the weaker check pass
+    ``require_full=False``; the returned list still begins with a warning
+    marking the validation as partial.
     """
     schema = build_schema()
     if kind != "auto" and kind in schema["$defs"]:
@@ -276,7 +284,17 @@ def validate_artifact(doc: dict, kind: str = "auto") -> list:
         return [f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
                 for e in validator.iter_errors(doc)]
     except ImportError:
-        return _minimal_validate(sub, doc)
+        if require_full:
+            return [
+                "FULL-SCHEMA VALIDATOR REQUIRED: the optional 'jsonschema' "
+                "package is not installed, and the built-in fallback cannot "
+                "enforce every keyword (e.g. pattern, type unions). Install "
+                "it: pip install jsonschema — or call with require_full=False "
+                "to accept explicitly partial validation."]
+        errors = _minimal_validate(sub, doc)
+        return ["WARNING: partial validation (jsonschema not installed; "
+                "fallback enforces required/enum/const/additionalProperties "
+                "only)"] + errors
 
 
 def _minimal_validate(schema: dict, doc, path: str = "", errors: list = None) -> list:

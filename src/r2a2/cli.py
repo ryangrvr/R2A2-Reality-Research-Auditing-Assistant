@@ -287,29 +287,36 @@ def _full_export_data(theory):
 
 
 def cmd_export_rocrate(args) -> int:
-    from .rocrate import export_rocrate, crate_to_files
+    from .rocrate import export_rocrate, write_crate, check_conformance
     theory_dict, manifest_dict, records = _full_export_data(_load_theory(args.theory))
     crate = export_rocrate(
         theory_dict, manifest_dict, records,
         authors=args.author or [], code_revision=args.revision or "")
-    files = crate_to_files(crate)
-    import os
-    os.makedirs(args.output, exist_ok=True)
-    for path, content in files.items():
-        full = os.path.join(args.output, path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "w") as f:
-            f.write(content)
-    print(f"RO-Crate written to {args.output}/ ({len(files)} files)")
+    files = write_crate(crate, args.output)
+    # self-check conformance AFTER materializing the attached crate
+    import json as _json
+    doc = _json.load(open(os.path.join(args.output, "ro-crate-metadata.json")))
+    errs = check_conformance(doc, crate_dir=args.output)
+    if errs:
+        for e in errs:
+            print(f"X crate conformance: {e}")
+        return 1
+    print(f"RO-Crate written to {args.output}/ ({len(files)} files); "
+          "structural conformance check passed")
     return 0
 
 
 def cmd_export_prov(args) -> int:
-    from .prov_export import export_prov
+    from .prov_export import export_prov, check_prov_conformance
     import json
     theory_dict, manifest_dict, records = _full_export_data(_load_theory(args.theory))
     prov = export_prov(theory_dict, manifest_dict, records,
                        authors=args.author or [], code_revision=args.revision or "")
+    errs = check_prov_conformance(prov)
+    if errs:
+        for e in errs:
+            print(f"X PROV conformance: {e}")
+        return 1
     if args.output:
         with open(args.output, "w") as f:
             json.dump(prov, f, indent=2)

@@ -15,6 +15,6 @@ The package name on PyPI is ``r2a2-science`` (collision-resistant); the
 project title is R2A2 - Reality Research Auditing Assistant.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 FOUNDING_PRINCIPLE = "R2A2 verifies discipline, not truth."

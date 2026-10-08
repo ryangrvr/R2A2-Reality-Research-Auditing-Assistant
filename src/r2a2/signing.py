@@ -385,13 +385,14 @@ def _sigstore_transport(envelope: dict, digest: str):
     code path — including a mocked certificate identity, so the
     identity-A-signed/envelope-claims-B case fails here.
     """
+    from sigstore.models import Bundle  # type: ignore  # 4.x: sigstore.models
     from sigstore import verify as _sverify  # type: ignore
     if envelope.get("signature_format") != "sigstore-bundle-json":
         raise SigstoreVerificationError(
             "unsupported signature format: the supported wire format is the "
             "canonical Sigstore JSON bundle (sigstore-python >= 4.x); "
             "legacy base64 signatures are not accepted")
-    bundle = _sverify.Bundle.from_json(envelope["signature"])
+    bundle = Bundle.from_json(envelope["signature"])
     # identity+issuer binding: the CLIENT enforces the certificate SAN and
     # OIDC issuer against these expected values
     ident = _sverify.policy.Identity(identity=envelope.get("identity", ""),

@@ -103,6 +103,7 @@ def test_real_bundle_roundtrip_and_verify_path(tmp_path, monkeypatch):
     (separate test); here we exercise the verification lifecycle the adapter
     depends on."""
     from sigstore import verify as _sverify
+    from sigstore.models import Bundle
     import json as _json
 
     # A real 0.1 Sigstore bundle JSON with a DSSE envelope; verification of
@@ -136,6 +137,7 @@ def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
     transport path is exercised with a real-shape bundle, proving the parser
     and policy construction run against real 4.x classes.)"""
     from sigstore import verify as _sverify
+    from sigstore.models import Bundle
     from r2a2.signing import _sigstore_transport
 
     # a structurally-valid 0.1 bundle (Fulcio cert chain placeholder) — the
@@ -145,7 +147,7 @@ def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
                 "signature_format": "sigstore-bundle-json",
                 "identity": IDENTITY, "issuer": ISSUER_URL}
     factory, policy_obj, bundle_obj = _sigstore_transport(envelope, "digest")
-    assert isinstance(bundle_obj, _sverify.Bundle)
+    assert isinstance(bundle_obj, Bundle)
     assert factory == _sverify.Verifier.production
     assert policy_obj._identity == IDENTITY
 

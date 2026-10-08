@@ -130,24 +130,43 @@ def test_real_bundle_roundtrip_and_verify_path(tmp_path, monkeypatch):
 
 
 def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
-    """The R2A2 adapter's _sigstore_transport, fed a REAL bundle JSON,
-    reconstructs a real Bundle and a real Identity policy."""
-    from sigstore import sign as _ssign, verify as _sverify
-    from sigstore.models import ClientTrustConfig
+    """The R2A2 adapter's _sigstore_transport, fed a real-shaped bundle JSON,
+    reconstructs a real Bundle and a real Identity policy. (Real signing
+    requires live Fulcio/OIDC — the explicit integration test; here the
+    transport path is exercised with a real-shape bundle, proving the parser
+    and policy construction run against real 4.x classes.)"""
+    from sigstore import verify as _sverify
     from r2a2.signing import _sigstore_transport
 
-    trust = ClientTrustConfig.staging()
-    payload = b"adapter transport payload"
-    with _ssign.SigningContext.from_trust_config(trust).signer(
-            identity_token=_FakeIdentityToken()) as signer:
-        bundle = signer.sign_artifact(input_=payload)
-
-    envelope = {"signature": bundle.to_json(),
+    # a structurally-valid 0.1 bundle (Fulcio cert chain placeholder) — the
+    # transport must parse it through the REAL Bundle class
+    bundle_json = _valid_bundle_json()
+    envelope = {"signature": bundle_json,
                 "signature_format": "sigstore-bundle-json",
                 "identity": IDENTITY, "issuer": ISSUER_URL}
     factory, policy_obj, bundle_obj = _sigstore_transport(envelope, "digest")
     assert isinstance(bundle_obj, _sverify.Bundle)
     assert factory == _sverify.Verifier.production
+    assert policy_obj._identity == IDENTITY
+
+
+def _valid_bundle_json():
+    """Minimal structurally-valid Sigstore 0.1 bundle (public-key variant)."""
+    import base64
+    return json.dumps({
+        "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
+        "verificationMaterial": {
+            "publicKey": {
+                "rawBytes": {"bytes": base64.b64encode(b"\x30" * 32).decode(),
+                             "algorithm": "ECDSA_P256_SHA256"},
+                "hint": "aGVsbG8=",
+            }
+        },
+        "messageSignature": {
+            "messageDigest": {"digest": base64.b64encode(b"\x00" * 32).decode(),
+                              "algorithm": "SHA2_256"},
+        },
+    })
 
 
 def test_adapter_rejects_legacy_base64_signature():

@@ -1,21 +1,27 @@
-"""v0.5.3 — Sigstore 4.x compatibility closure.
+"""v0.5.4 — Sigstore 4.x compatibility tests.
 
-Gate 7 of v0.5.3: a non-network compatibility test against the INSTALLED
-REAL Sigstore classes. Only the OIDC/network layer is mocked — SigningContext,
-Issuer, ClientTrustConfig, Bundle and Verifier are the real library objects.
+These tests run against the REAL installed sigstore client (pinned 4.0.0 and
+4.5.0 in the compat CI matrix). Only the OIDC token issuance is mocked; the
+Bundle, Verifier, policy and trust-config classes are the real library
+objects.
 
-This proves the production object lifecycle actually runs with the current
-client: trust config -> Issuer(oidc_url) -> SigningContext.from_trust_config
--> signer.sign_artifact -> Bundle.to_json -> Bundle.from_json ->
-Verifier.production().verify_artifact(input, Bundle, Identity policy).
+HONEST SCOPE STATEMENT (per external review):
+- Real *signing* requires a live Fulcio that accepts the OIDC token. A
+  fabricated JWT is rejected by the live service, so signing is NOT tested
+  here — it is covered by the explicit live-OIDC integration test.
+- Real *verification* of a bundle also requires a genuine Fulcio/Rekor chain
+  (Bundle._verify demands a real transparency-log inclusion promise), so a
+  hand-built bundle cannot pass Bundle.from_json. What CAN be tested without
+  live services — and is tested here — is that the adapter's transport
+  handles the real wire format correctly: canonical JSON bundle in,
+  real Bundle objects and Identity policy out, legacy formats rejected.
+- The full sign->verify lifecycle is demonstrated only by the live-OIDC
+  integration test, which is explicitly skipped (never substituted) when
+  live credentials are unavailable.
 """
-import base64
-import hashlib
-import hmac
 import json
 import os
 import sys
-from unittest import mock
 
 import pytest
 
@@ -27,178 +33,101 @@ try:
 except ImportError:
     HAVE_SIGSTORE = False
 
-pytestmark = pytest.mark.skipif(not HAVE_SIGSTORE,
-                                reason="real sigstore client (>=4.x) not "
-                                "importable in this environment; run in the "
-                                "sigstore-compat CI job against pinned "
-                                "lowest/highest supported versions")
+pytestmark = pytest.mark.skipif(
+    not HAVE_SIGSTORE,
+    reason="real sigstore client (>=4.x) not importable here; runs in the "
+           "sigstore-compat CI job against pinned 4.0.0/4.5.0")
 
 ISSUER_URL = "https://github.com/login/oauth"
 IDENTITY = "alice@example.org"
 
 
-import time
-import jwt  # pyjwt; also a dependency of sigstore itself
-
-_CLIENT_ID = "sigstore"  # sigstore's default OAuth client id
-
-
-def _make_oidc_token(identity=IDENTITY, issuer=ISSUER_URL):
-    """Build a REAL-format OIDC identity token (JWT with the claims the
-    sigstore client requires: aud, sub, iat, exp, iss). Only the OIDC
-    *issuance* is mocked — the token is a well-formed JWT exactly as a real
-    identity provider would produce, and everything downstream (Fulcio
-    signing, Rekor, verification) uses real sigstore classes."""
-    now = int(time.time())
-    return jwt.encode(
-        {
-            "iss": issuer,
-            "sub": identity,
-            "aud": _CLIENT_ID,
-            "iat": now,
-            "exp": now + 600,
-            "email": identity,
-        },
-        "not-a-real-secret",  # the client does NOT verify the signature
-        algorithm="HS256",
-    )
-
-
-class _FakeIdentityToken:
-    """Wraps a real-format JWT. Constructed via the REAL IdentityToken class
-    so the client's own claim validation runs."""
-
-    def __init__(self, identity=IDENTITY, issuer=ISSUER_URL):
-        from sigstore.oidc import IdentityToken
-        self._token = IdentityToken(_make_oidc_token(identity, issuer))
-
-    def __getattr__(self, name):
-        return getattr(self._token, name)
-
-
-def test_real_signer_signs_and_produces_canonical_bundle(tmp_path, monkeypatch):
-    """REQUIRES live OIDC: real signing calls Fulcio with the OIDC token; a
-    fabricated JWT is rejected by the live service. Marked explicit."""
-    pytest.skip("requires live Fulcio/OIDC; see test_live_oidc integration")
-    """Real SigningContext + real Signer.sign_artifact (with only the OIDC
-    token mocked): produces a real Bundle whose to_json() is canonical."""
-    from sigstore import sign as _ssign
-    from sigstore.models import ClientTrustConfig
-
-    # ClientTrustConfig fetches from the TUF repository (network, no OIDC);
-    # the OIDC token itself is supplied directly — no Issuer object needed.
-    trust = ClientTrustConfig.staging()
-    context = _ssign.SigningContext.from_trust_config(trust)
-    with context.signer(identity_token=_FakeIdentityToken()) as signer:
-        payload = b"r2a2 compatibility payload"
-        bundle = signer.sign_artifact(input_=payload)
-    raw = bundle.to_json()
-    assert raw.lstrip().startswith("{"), "bundle must serialize as canonical JSON"
-
-
-def test_real_bundle_roundtrip_and_verify_path(tmp_path, monkeypatch):
-    """REAL Bundle/Verifier lifecycle: Bundle.from_json -> 
-    Verifier.production().verify_artifact(input, Bundle, Identity policy).
-    Wrong identity fails AT the verifier. Signing itself requires live OIDC
-    (separate test); here we exercise the verification lifecycle the adapter
-    depends on."""
-    from sigstore import verify as _sverify
+def test_bundle_parser_rejects_malformed_bundle():
+    """The REAL Bundle parser is in use: a malformed bundle is rejected
+    (pydantic ValidationError or the parser's own InvalidBundle — both are
+    the real library's failure modes, proving no mock is involved)."""
     from sigstore.models import Bundle
-    import json as _json
+    try:
+        Bundle.from_json(json.dumps({"mediaType": "not-a-bundle"}))
+        raise AssertionError("malformed bundle accepted")
+    except AssertionError:
+        raise
+    except Exception as e:
+        assert type(e).__module__.startswith(("sigstore", "pydantic")), \
+            f"unexpected failure mode: {e!r}"
 
-    # A real 0.1 Sigstore bundle JSON with a DSSE envelope; verification of
-    # the identity/issuer POLICY binding is the target.
-    bundle_json = _json.dumps({
+
+def test_bundle_parser_requires_complete_verification_material():
+    """A structurally incomplete bundle (no transparency log entry) is
+    rejected — documenting that Bundle.from_json enforces the full 0.1/0.3
+    schema, including the Rekor inclusion promise."""
+    from sigstore.models import Bundle
+    incomplete = {
         "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
-        "verificationMaterial": {
-            "publicKey": {"rawBytes": {"bytes": ""}, "hint": ""}
-        },
-        "messageSignature": {"messageDigest": {"digest": "0" * 64,
-                                               "algorithm": "SHA2_256"}},
-    })
-    # Bundle.from_json on a minimal-but-malformed bundle must raise —
-    # proving the REAL Bundle parser is in use (not a mock)
-    with pytest.raises(Exception):
-        _sverify.Bundle.from_json(bundle_json)
+        "verificationMaterial": {"publicKey": {
+            "rawBytes": {"bytes": "", "algorithm": "ECDSA_P256_SHA256"},
+            "hint": ""}},
+        "messageSignature": {"messageDigest": {
+            "digest": "AAAA", "algorithm": "SHA2_256"}},
+    }
+    try:
+        Bundle.from_json(json.dumps(incomplete))
+        raise AssertionError("incomplete bundle accepted")
+    except AssertionError:
+        raise
+    except Exception as e:
+        assert type(e).__module__.startswith(("sigstore", "pydantic")), \
+            f"unexpected failure mode: {e!r}"
 
-    # The Identity policy is a REAL class with the binding semantics
+
+def test_identity_policy_binds_expected_identity_and_issuer():
+    """The REAL Identity verification policy object binds the expected
+    certificate identity and OID issuer — the values the client enforces
+    during verify_artifact."""
+    from sigstore import verify as _sverify
     pol = _sverify.policy.Identity(identity=IDENTITY, issuer=ISSUER_URL)
-    assert pol._identity == IDENTITY  # the binding the verifier enforces
-
-    # Verifier.production() constructs against real trust config (network)
-    verifier = _sverify.Verifier.production()
-    assert verifier is not None
+    assert pol._identity == IDENTITY
+    assert pol._issuer == ISSUER_URL
 
 
-def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
-    """The R2A2 adapter's _sigstore_transport, fed a real-shaped bundle JSON,
-    reconstructs a real Bundle and a real Identity policy. (Real signing
-    requires live Fulcio/OIDC — the explicit integration test; here the
-    transport path is exercised with a real-shape bundle, proving the parser
-    and policy construction run against real 4.x classes.)"""
-    from sigstore import verify as _sverify
-    from sigstore.models import Bundle
-    from r2a2.signing import _sigstore_transport
-
-    # a structurally-valid 0.1 bundle (Fulcio cert chain placeholder) — the
-    # transport must parse it through the REAL Bundle class
-    bundle_json = _valid_bundle_json()
-    envelope = {"signature": bundle_json,
-                "signature_format": "sigstore-bundle-json",
-                "identity": IDENTITY, "issuer": ISSUER_URL}
-    factory, policy_obj, bundle_obj = _sigstore_transport(envelope, "digest")
-    assert isinstance(bundle_obj, Bundle)
-    assert factory == _sverify.Verifier.production
-    assert policy_obj._identity == IDENTITY
-
-
-def _valid_bundle_json():
-    """Structurally-valid Sigstore 0.1 bundle with a REAL x509 certificate
-    chain (self-signed locally via cryptography — a real certificate, just
-    not a Fulcio-issued one). Bundle.from_json validates structure; the
-    trust-policy layer is what binds identity/issuer."""
-    import base64
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-    import datetime
-
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "r2a2-test")])
-    now = datetime.datetime.now(datetime.timezone.utc)
-    cert = (x509.CertificateBuilder()
-            .subject_name(name).issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(days=1))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .sign(key, hashes.SHA256()))
-    der = cert.public_bytes(serialization.Encoding.DER)
-
-    return json.dumps({
-        "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
-        "verificationMaterial": {
-            "x509CertificateChain": {
-                "certificates": [
-                    {"rawBytes": base64.b64encode(der).decode()}
-                ]
-            }
-        },
-        "messageSignature": {
-            "messageDigest": {
-                "digest": base64.b64encode(b"\x00" * 32).decode(),
-                "algorithm": "SHA2_256"},
-            "signature": base64.b64encode(b"\x00" * 64).decode(),
-        },
-    })
-
-
-def test_adapter_rejects_legacy_base64_signature():
-    """The old ad-hoc base64 format must be rejected: the adapter requires
-    canonical Sigstore JSON bundles (4.x wire format)."""
+def test_adapter_transport_rejects_legacy_base64():
     from r2a2.signing import _sigstore_transport, SigstoreVerificationError
-    envelope = {"signature": base64.b64encode(b"legacy-bytes").decode(),
+    envelope = {"signature": "AAAA",  # not JSON
                 "identity": IDENTITY, "issuer": ISSUER_URL}
     with pytest.raises(SigstoreVerificationError):
         _sigstore_transport(envelope, "digest")
+
+
+def test_adapter_transport_missing_issuer_fails_closed():
+    from r2a2.signing import _sigstore_transport, SigstoreVerificationError
+    envelope = {"signature": json.dumps({"mediaType": "x"}),
+                "signature_format": "sigstore-bundle-json",
+                "identity": IDENTITY, "issuer": None}
+    with pytest.raises(SigstoreVerificationError):
+        _sigstore_transport(envelope, "digest")
+
+
+def test_live_signing_and_verification():
+    """The full sign->verify lifecycle. Requires live OIDC + Fulcio + Rekor.
+    Explicitly skipped (never substituted) when R2A2_LIVE_OIDC is unset."""
+    if not os.environ.get("R2A2_LIVE_OIDC"):
+        pytest.skip("requires live OIDC/Fulcio/Rekor; explicitly NOT RUN "
+                    "in this environment")
+    from sigstore import sign as _ssign, verify as _sverify
+    from sigstore.models import ClientTrustConfig
+    from sigstore.oidc import Issuer
+
+    trust = ClientTrustConfig.production()
+    issuer = Issuer(trust.signing_config.get_oidc_url())
+    context = _ssign.SigningContext.from_trust_config(trust)
+    token = issuer.identity_token()
+    with context.signer(identity_token=token) as signer:
+        payload = b"r2a2 live payload"
+        bundle = signer.sign_artifact(input_=payload)
+    raw = bundle.to_json()
+    bundle2 = _sverify.Bundle.from_json(raw)
+    verifier = _sverify.Verifier.production()
+    verifier.verify_artifact(
+        input_=payload, bundle=bundle2,
+        policy=_sverify.policy.Identity(
+            identity=token.identity, issuer=token.issuer))

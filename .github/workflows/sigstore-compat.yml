@@ -1,6 +1,6 @@
 # Sigstore compatibility matrix (v0.5.4): real Bundle/Verifier classes.
-# Test output is published to the job summary so failures are publicly
-# diagnosable without repo-admin log access.
+# Failures are emitted as ::error:: annotations so they are visible in the
+# public API without repo-admin log access.
 name: sigstore-compat
 on: [push, pull_request]
 jobs:
@@ -18,14 +18,11 @@ jobs:
       - run: pip install "sigstore==${{ matrix.sigstore-version }}"
       - name: run compatibility tests
         run: |
-          set -o pipefail
-          python -m pytest tests/test_sigstore_compat.py -v 2>&1 | tee test-output.txt
-      - name: publish output to job summary
-        if: always()
-        run: |
-          {
-            echo "### sigstore ${{ matrix.sigstore-version }} compatibility"
-            echo '\`\`\`'
-            tail -60 test-output.txt || true
-            echo '\`\`\`'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python -m pytest tests/test_sigstore_compat.py -v > out.txt 2>&1 || true
+          cat out.txt
+          # surface failures as ::error:: annotations (public via API)
+          grep -E "^FAILED|^ERROR" out.txt | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          grep -E "^FAILED|^ERROR" out.txt > /dev/null && exit 1 || \
+            grep -qE "no tests ran" out.txt && exit 1 || exit 0

@@ -1,7 +1,6 @@
-# Sigstore compatibility matrix (v0.5.4): test against the lowest and highest
-# supported sigstore-python versions. Mocks ONLY the OIDC/network layer;
-# SigningContext, Bundle and Verifier are real library classes.
-# Stop condition: BOTH matrix jobs green.
+# Sigstore compatibility matrix (v0.5.4): real Bundle/Verifier classes.
+# Test output is published to the job summary so failures are publicly
+# diagnosable without repo-admin log access.
 name: sigstore-compat
 on: [push, pull_request]
 jobs:
@@ -15,9 +14,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - name: install package with test dependencies
-        run: pip install -e ".[dev]"
-      - name: install pinned sigstore
-        run: pip install "sigstore==${{ matrix.sigstore-version }}"
-      - name: run compatibility tests against real Sigstore classes
-        run: python -m pytest tests/test_sigstore_compat.py -v
+      - run: pip install -e ".[dev]"
+      - run: pip install "sigstore==${{ matrix.sigstore-version }}"
+      - name: run compatibility tests
+        run: |
+          set -o pipefail
+          python -m pytest tests/test_sigstore_compat.py -v 2>&1 | tee test-output.txt
+      - name: publish output to job summary
+        if: always()
+        run: |
+          {
+            echo "### sigstore ${{ matrix.sigstore-version }} compatibility"
+            echo '\`\`\`'
+            tail -60 test-output.txt || true
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"

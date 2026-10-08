@@ -1,3 +1,44 @@
+# R2A2 v0.5.4 — Sigstore compat execution closure (v0.5 BANKED)
+
+## External review of v0.5.3 (commit caad157)
+
+**Verdict: `caad157` — checked: ChatGPT — ISSUE FOUND.** Decisive evidence
+from the remote: the sigstore-compat workflow for caad157 FAILED — both
+matrix jobs died with "No module named pytest" before running any test, and
+the committed `_sigstore_transport()` still contained the old base64/raw-bytes
+path. So 4.x signing→bundle→verification compatibility was claimed but not
+demonstrated.
+
+**Lesson recorded:** a locally-skipped test is not a demonstration; only the
+remote CI run counts.
+
+## Fixes
+
+1. `_sigstore_transport()` requires `signature_format ==
+   "sigstore-bundle-json"`; reconstructs the real `verify.Bundle` via
+   `Bundle.from_json(...)`; legacy base64 raises `SigstoreVerificationError`.
+   Missing issuer fails closed BEFORE parsing.
+2. `_sigstore_verify()` calls the actual 4.x method
+   `verifier.verify_artifact(input_, bundle, policy)` — the same method the
+   compat tests exercise against real Bundle/Verifier classes.
+3. CI installs `pip install -e ".[dev]"` before the pinned sigstore,
+   fail-fast disabled so both versions report independently.
+4. Compat test corrections driven by real CI failures: `ClientTrustConfig`
+   lives in `sigstore.models`; the OIDC token is passed directly to the
+   signer; real signing requires live Fulcio (explicitly marked);
+   identity/issuer binding asserted via the real `Identity._identity` and
+   `OIDCIssuer._value`.
+
+## Remote verification — the stop condition
+
+**4.0.0 CI PASS ∧ 4.5.0 CI PASS** — both matrix jobs `success`, verified from
+the remote. `verify` workflow also green. 171 tests pass locally.
+
+**v0.5 — ecosystem trust & supply-chain security: BANKED.** Security auditing
+ends at this level. Next: v0.6 Compute Fabric / HPC.
+
+---
+
 # R2A2 v0.5 — ecosystem trust & supply-chain security
 
 Entering state: v0.1–0.3 (semantic/audit/trust core) BANKED; v0.4 (adoption &

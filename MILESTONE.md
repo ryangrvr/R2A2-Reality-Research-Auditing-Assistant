@@ -23,6 +23,82 @@ Key principle: **R2A2 audits numerical equivalence, not numerical identity** —
 three explicit classes: EXACT, NUMERICAL (|x_A−x_B| ≤ a + r·|x_ref| with
 frozen tolerances), STATISTICAL (frozen comparison rule).
 
+## v0.6 progress — Compute Fabric / HOC (working log)
+
+### Implemented
+
+**A/C. Compute protocol** (`r2a2/compute.py`): BackendDescriptor,
+ComputeRequest, ComputeResult, ExecutionContext, ResourceRequest, ComputeProfile,
+ComputeBackend abstract protocol (probe/capabilities/prepare/execute/
+fingerprint + optional checkpoint/resume). No JAX/Torch/CUDA/MPI/Slurm
+concepts in the theory model.
+
+**B. Capability negotiation**: ResourceRequest declares requirements;
+negotiate() selects a fully-satisfying backend; missing capability = PROTOCOL
+FAILURE before scientific execution ("R2A2 never silently degrades a
+scientific requirement"). Tested: GPU-required-no-GPU, float64-required vs
+float32-realized, deterministic-required, unknown backend.
+
+**C. Compute profile**: precision policy, seed policy, determinism,
+backend family, device class, distributed topology, tolerance policy,
+checkpoint policy, resources, reproducibility rule — material_hash() binds
+scientifically material fields only. Tested: precision change changes hash;
+determinism change changes hash; wall time / incidental metadata does NOT.
+
+**D. NumPy backend** (`r2a2/compute_backends.py`): CPU reference via the new
+protocol; capability reporting distinguishes design capability from optional
+dependency presence (honest "stdlib-fallback" warning when numpy absent).
+
+**E/F. JAX + Torch backends**: optional; pass when installed, raise
+ExecutionError honestly when absent; report devices/platform/precision/
+determinism LIMITATIONS (JAX float32-on-accelerator note, torch
+use_deterministic_algorithms note). Zero theory-core conditionals (leakage
+test asserts the theory model source is free of jax/torch/cuda/mpi/slurm).
+
+**G. External executable backend**: content-bound executable identity (hash,
+not filename — renaming keeps identity, editing changes it), frozen workdir,
+input/output hashes, exit status, stdout/stderr hashes, declared extraction
+(undeclared extraction = protocol error; stdout text never auto-becomes a
+result). Tested: content binding, rename invariance, edit sensitivity,
+missing binary.
+
+**H. Reproducibility classes**: EXACT / NUMERICAL (frozen atol+rtol) /
+STATISTICAL (mean-z, KS). Rule hash binds tolerances; hostile test proves a
+loosened tolerance is a different rule with a different hash — visible, never
+silent.
+
+**I. Cross-backend reproduction** (`r2a2/reproduce.py`): same frozen manifest
+→ multiple backends → frozen rule; comparison artifact with fingerprints,
+payload hashes, rule hash, verdict; requires a frozen rule (protocol error
+otherwise); disagreement reported as a scientific finding, never hidden.
+
+**J/K/L/M. Work units + RNG**: WorkUnit bound to manifest with identity-
+derived seeds (manifest|experiment|work-unit ⊗ replicate — orthogonal
+dimensions); map_work with retry-as-provenance (attempts recorded, payload
+hash unchanged); reduce_results with deterministic order option; tested:
+scheduling-order invariance, 100 distinct streams, retry transparency.
+
+**N. Checkpointing**: sealed checkpoints (content hash), version-checked;
+resume validates manifest/experiment/work-unit/material config/backend —
+mismatch = PROTOCOL failure. Tested: roundtrip, resume==uninterrupted,
+wrong manifest/experiment/seed, edited checkpoint.
+
+**O/Q. Retry + artifacts**: retries recorded as provenance; external outputs
+hashed; wall time excluded from payload hash (tested).
+
+**T/U. Failure taxonomy + CLI**: compute probe/backends/doctor, run-backend
+(negotiation → execution), reproduce, checkpoint inspect — existing failure
+kinds preserved.
+
+**S. Stochastic ensemble test**: 1 worker vs reordered scheduling vs
+checkpoint/resume produce identical results (identity-derived seeds);
+statistical rule agrees.
+
+### Remaining for full v0.6 gate closure
+- R: two-body cross-backend run on JAX/Torch when installed (needs deps in CI)
+- Live-OIDC-style explicit skips for missing accelerator deps (done)
+- Final report
+
 ---
 
 # R2A2 v0.5.4 — Sigstore compat execution closure (v0.5 BANKED)

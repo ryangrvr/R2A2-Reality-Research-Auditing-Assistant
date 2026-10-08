@@ -584,6 +584,114 @@ def cmd_plugins_verify(args):
     print(json.dumps(rep, indent=2))
     return 0 if rep["trusted"] else 1
 
+
+def cmd_compute(args) -> int:
+    from .compute_backends import available_backends
+    from .compute import ResourceRequest, negotiate, CAP_CPU, CAP_GPU, \
+        CAP_FLOAT64, CAP_DETERMINISTIC
+    subs = available_backends()
+    if args.action == "probe":
+        for b in subs:
+            d = b.probe()
+            print(f"{d.backend_id:10} v{d.version:12} devices={d.devices} "
+                  f"type={d.device_type:8} realized={d.precision_realized or '-':8} "
+                  f"deterministic={d.deterministic}")
+            if d.extra:
+                for k, v in d.extra.items():
+                    print(f"  {k}: {v}")
+        return 0
+    if args.action == "backends":
+        for b in subs:
+            d = b.probe()
+            print(f"{d.backend_id}: {sorted(d.capabilities)}")
+        return 0
+    if args.action == "doctor":
+        # capability negotiation check for a declared request
+        req = ResourceRequest(capabilities=args.require or [CAP_CPU])
+        try:
+            b = negotiate(req, subs)
+            print(f"negotiated: {b.probe().backend_id} satisfies {sorted(req.capabilities)}")
+            return 0
+        except Exception as exc:
+            print(f"X {exc}")
+            return 1
+    print("unknown action; use probe | backends | doctor")
+    return 1
+
+
+def cmd_run_backend(args) -> int:
+    """Run via the Compute Fabric with capability negotiation."""
+    from .compute import ComputeProfile, ExecutionContext, ComputeRequest, \
+        ResourceRequest, negotiate
+    from .compute_backends import available_backends, get_compute_backend
+    from .runner import run_manifest
+    theory = _load_theory(args.theory)
+    manifest, ledger = compile_theory(theory, seeds={"default": args.seed},
+                                      backend=args.backend)
+    manifest.freeze()
+    subs = available_backends()
+    req = ResourceRequest(capabilities=args.require or ["cpu"])
+    backend = negotiate(req, subs, requested_backend=args.backend)
+    profile = ComputeProfile(
+        seed_policy={"seed": args.seed},
+        precision_policy="float64",
+        reproducibility=None)
+    ctx = ExecutionContext(backend, profile, manifest.hash)
+    creq = ComputeRequest(experiment=args.experiment or next(iter(theory.experiments)),
+                          args={"_theory": theory}, seed=args.seed)
+    result = backend.execute(creq, ctx)
+    print(f"backend: {result.backend_id} | payload hash: {result.payload_hash()}")
+    print(f"fingerprint: {result.fingerprint['material'] or 'none'} "
+          f"({result.fingerprint['backend']['id']})")
+    print(json.dumps(result.payload, default=str)[:400])
+    return 0
+
+
+def cmd_reproduce(args) -> int:
+    from .compute import ComputeProfile, ReproducibilityRule
+    from .compute_backends import available_backends
+    from .reproduce import reproduce
+    theory = _load_theory(args.theory)
+    manifest, ledger = compile_theory(theory, seeds={"default": 0})
+    manifest.freeze()
+    subs = available_backends()
+    chosen = [b for b in subs if b.descriptor.backend_id in args.backend]
+    if len(chosen) < 2:
+        print(f"X need at least two of {args.backend}; installed: "
+              f"{[b.descriptor.backend_id for b in subs]}")
+        return 1
+    rule = ReproducibilityRule(kind=args.rule,
+                               atol=args.atol, rtol=args.rtol)
+    profile = ComputeProfile(seed_policy={"seed": 0}, precision_policy="float64",
+                             reproducibility=rule)
+    experiment = args.experiment or next(iter(theory.experiments))
+    report = reproduce(theory, manifest.hash, profile, chosen, experiment,
+                       rule=rule, reference=args.reference)
+    print(f"rule: {report['reproducibility_rule']} (hash {report['rule_hash']})")
+    for c in report["comparisons"]:
+        print(f"  {c['backend']:12} vs {c['reference']}: "
+              f"{'AGREE' if c['agrees'] else 'DISAGREE'} — {c['detail']}")
+    print(f"agreement: {report['agreement']}")
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(report, f, indent=2, default=str)
+    return 0 if report["agreement"].startswith("AGREE") else 1
+
+
+def cmd_checkpoint(args) -> int:
+    from .distributed import Checkpoint
+    if args.action == "inspect":
+        cp = Checkpoint.load(args.file)
+        print(f"checkpoint {cp.seal()[:12]}…")
+        print(f"  manifest:   {cp.manifest_hash[:12]}…")
+        print(f"  experiment: {cp.experiment}")
+        print(f"  work unit:  {cp.work_unit_id}")
+        print(f"  backend:    {cp.backend_id}")
+        print(f"  material:   {cp.material_config[:12] or '-'}")
+        return 0
+    print("unknown action; use inspect")
+    return 1
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="r2a2", description=__doc__)
     p.add_argument("--version", action="version", version=f"r2a2 {__version__}")
@@ -710,6 +818,35 @@ def main(argv=None) -> int:
     p2 = sub2.add_parser("list"); p2.add_argument("--dir", default="."); p2.add_argument("--trusted", nargs="*"); p2.set_defaults(fn=cmd_plugins_list)
     p2 = sub2.add_parser("inspect"); p2.add_argument("manifest"); p2.set_defaults(fn=cmd_plugins_inspect)
     p2 = sub2.add_parser("verify"); p2.add_argument("manifest"); p2.add_argument("--allow-unsigned", action="store_true"); p2.add_argument("--trusted", nargs="*"); p2.add_argument("--policy", default=None); p2.set_defaults(fn=cmd_plugins_verify)
+
+    s = sub.add_parser("compute", help="compute fabric: probe | backends | doctor")
+    s.add_argument("action")
+    s.add_argument("--require", nargs="*", default=None)
+    s.set_defaults(fn=cmd_compute)
+
+    s = sub.add_parser("run-backend", help="run one experiment via the Compute Fabric with negotiation")
+    s.add_argument("theory")
+    s.add_argument("--backend", default="numpy")
+    s.add_argument("--experiment", default=None)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--require", nargs="*", default=None)
+    s.set_defaults(fn=cmd_run_backend)
+
+    s = sub.add_parser("reproduce", help="cross-backend reproduction under a frozen rule")
+    s.add_argument("theory")
+    s.add_argument("--backend", nargs="+", required=True)
+    s.add_argument("--experiment", default=None)
+    s.add_argument("--rule", default="numerical", choices=["exact", "numerical", "statistical"])
+    s.add_argument("--atol", type=float, default=1e-9)
+    s.add_argument("--rtol", type=float, default=1e-6)
+    s.add_argument("--reference", default=None)
+    s.add_argument("-o", "--output", default=None)
+    s.set_defaults(fn=cmd_reproduce)
+
+    s = sub.add_parser("checkpoint", help="checkpoint inspect | resume")
+    s.add_argument("action")
+    s.add_argument("file")
+    s.set_defaults(fn=cmd_checkpoint)
 
     s = sub.add_parser("init-project", help="scaffold a full external-user theory project")
     s.add_argument("dir")

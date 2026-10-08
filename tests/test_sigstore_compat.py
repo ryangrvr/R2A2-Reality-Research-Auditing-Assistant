@@ -37,15 +37,43 @@ ISSUER_URL = "https://github.com/login/oauth"
 IDENTITY = "alice@example.org"
 
 
+import time
+import jwt  # pyjwt; also a dependency of sigstore itself
+
+_CLIENT_ID = "sigstore"  # sigstore's default OAuth client id
+
+
+def _make_oidc_token(identity=IDENTITY, issuer=ISSUER_URL):
+    """Build a REAL-format OIDC identity token (JWT with the claims the
+    sigstore client requires: aud, sub, iat, exp, iss). Only the OIDC
+    *issuance* is mocked — the token is a well-formed JWT exactly as a real
+    identity provider would produce, and everything downstream (Fulcio
+    signing, Rekor, verification) uses real sigstore classes."""
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": issuer,
+            "sub": identity,
+            "aud": _CLIENT_ID,
+            "iat": now,
+            "exp": now + 600,
+            "email": identity,
+        },
+        "not-a-real-secret",  # the client does NOT verify the signature
+        algorithm="HS256",
+    )
+
+
 class _FakeIdentityToken:
-    """Mocks ONLY the OIDC network layer: a token whose identity/issuer are
-    what a real OIDC flow would return. Everything downstream is real."""
+    """Wraps a real-format JWT. Constructed via the REAL IdentityToken class
+    so the client's own claim validation runs."""
 
-    identity = IDENTITY
-    issuer = ISSUER_URL
+    def __init__(self, identity=IDENTITY, issuer=ISSUER_URL):
+        from sigstore.oidc import IdentityToken
+        self._token = IdentityToken(_make_oidc_token(identity, issuer))
 
-    def __str__(self):
-        return "fake-oidc-token"
+    def __getattr__(self, name):
+        return getattr(self._token, name)
 
 
 def test_real_signer_signs_and_produces_canonical_bundle(tmp_path, monkeypatch):

@@ -153,20 +153,43 @@ def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
 
 
 def _valid_bundle_json():
-    """Minimal structurally-valid Sigstore 0.1 bundle (public-key variant)."""
+    """Structurally-valid Sigstore 0.1 bundle with a REAL x509 certificate
+    chain (self-signed locally via cryptography — a real certificate, just
+    not a Fulcio-issued one). Bundle.from_json validates structure; the
+    trust-policy layer is what binds identity/issuer."""
     import base64
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    import datetime
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "r2a2-test")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .sign(key, hashes.SHA256()))
+    der = cert.public_bytes(serialization.Encoding.DER)
+
     return json.dumps({
         "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
         "verificationMaterial": {
-            "publicKey": {
-                "rawBytes": {"bytes": base64.b64encode(b"\x30" * 32).decode(),
-                             "algorithm": "ECDSA_P256_SHA256"},
-                "hint": "aGVsbG8=",
+            "x509CertificateChain": {
+                "certificates": [
+                    {"rawBytes": base64.b64encode(der).decode()}
+                ]
             }
         },
         "messageSignature": {
-            "messageDigest": {"digest": base64.b64encode(b"\x00" * 32).decode(),
-                              "algorithm": "SHA2_256"},
+            "messageDigest": {
+                "digest": base64.b64encode(b"\x00" * 32).decode(),
+                "algorithm": "SHA2_256"},
+            "signature": base64.b64encode(b"\x00" * 64).decode(),
         },
     })
 

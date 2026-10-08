@@ -392,6 +392,10 @@ def _sigstore_transport(envelope: dict, digest: str):
             "unsupported signature format: the supported wire format is the "
             "canonical Sigstore JSON bundle (sigstore-python >= 4.x); "
             "legacy base64 signatures are not accepted")
+    if not envelope.get("issuer"):
+        raise SigstoreVerificationError(
+            "no OIDC issuer constraint on the envelope; refusing identity "
+            "authentication without one (fail closed)")
     bundle = Bundle.from_json(envelope["signature"])
     # identity+issuer binding: the CLIENT enforces the certificate SAN and
     # OIDC issuer against these expected values

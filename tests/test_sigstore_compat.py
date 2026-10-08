@@ -83,13 +83,20 @@ def test_bundle_parser_requires_complete_verification_material():
 def test_identity_policy_binds_expected_identity_and_issuer():
     """The REAL Identity verification policy object binds the expected
     certificate identity and OID issuer — the values the client enforces
-    during verify_artifact."""
+    during verify_artifact.
+
+    Identity._issuer is an OIDCIssuer policy object whose internal value is
+    the issuer string; we assert both the stored identity and that an issuer
+    constraint was actually created (issuer-optional semantics).
+    """
     from sigstore import verify as _sverify
     pol = _sverify.policy.Identity(identity=IDENTITY, issuer=ISSUER_URL)
     assert pol._identity == IDENTITY
-    # _issuer is an OIDCIssuer wrapper; compare its URL
-    assert getattr(pol._issuer, "issuer_url", None) == ISSUER_URL or \
-        str(getattr(pol._issuer, "issuer_url", "")) == ISSUER_URL
+    assert pol._issuer is not None          # issuer constraint created
+    assert pol._issuer._value == ISSUER_URL  # bound to the expected issuer
+    # issuer-optional: omitting the issuer creates no constraint
+    pol2 = _sverify.policy.Identity(identity=IDENTITY, issuer=None)
+    assert pol2._issuer is None
 
 
 def test_adapter_transport_rejects_legacy_base64():

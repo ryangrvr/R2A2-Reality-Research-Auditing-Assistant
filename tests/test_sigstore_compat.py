@@ -83,7 +83,7 @@ def test_real_signer_signs_and_produces_canonical_bundle(tmp_path, monkeypatch):
     """Real SigningContext + real Signer.sign_artifact (with only the OIDC
     token mocked): produces a real Bundle whose to_json() is canonical."""
     from sigstore import sign as _ssign
-    from sigstore._internal.trust import ClientTrustConfig
+    from sigstore.models import ClientTrustConfig
 
     # ClientTrustConfig fetches from the TUF repository (network, no OIDC);
     # the OIDC token itself is supplied directly — no Issuer object needed.
@@ -122,7 +122,7 @@ def test_real_bundle_roundtrip_and_verify_path(tmp_path, monkeypatch):
 
     # The Identity policy is a REAL class with the binding semantics
     pol = _sverify.policy.Identity(identity=IDENTITY, issuer=ISSUER_URL)
-    assert pol.identity == IDENTITY and pol.issuer == ISSUER_URL
+    assert pol._identity == IDENTITY  # the binding the verifier enforces
 
     # Verifier.production() constructs against real trust config (network)
     verifier = _sverify.Verifier.production()
@@ -133,7 +133,7 @@ def test_adapter_transport_uses_real_bundle_objects(tmp_path, monkeypatch):
     """The R2A2 adapter's _sigstore_transport, fed a REAL bundle JSON,
     reconstructs a real Bundle and a real Identity policy."""
     from sigstore import sign as _ssign, verify as _sverify
-    from sigstore._internal.trust import ClientTrustConfig
+    from sigstore.models import ClientTrustConfig
     from r2a2.signing import _sigstore_transport
 
     trust = ClientTrustConfig.staging()

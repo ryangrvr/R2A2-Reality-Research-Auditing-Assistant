@@ -1,3 +1,30 @@
+# R2A2 v0.6 — Compute Fabric / HPC (in progress)
+
+## Entering state (banked)
+
+- v0.1–v0.3: semantic, audit, reproducibility and scientific-trust core — BANKED
+- v0.4: external adoption and interoperability — BANKED
+- v0.5: ecosystem identity, plugin trust, supply-chain security — BANKED at
+  `f8c7972` (sigstore-compat 4.0.0 PASS ∧ 4.5.0 PASS; verify PASS);
+  bank record `58b8768`.
+
+External ruling: "f8c7972 — checked: ChatGPT — PASS. No open issue within the
+v0.5 ecosystem-trust/security scope." Security review stops here.
+
+## v0.6 organizing question
+
+Can the same frozen scientific declaration execute across laptop CPU,
+numerical libraries, accelerators, external programs and distributed workers
+without silently changing the science?
+
+Core invariant: **scientific semantics ⊥ compute substrate**.
+
+Key principle: **R2A2 audits numerical equivalence, not numerical identity** —
+three explicit classes: EXACT, NUMERICAL (|x_A−x_B| ≤ a + r·|x_ref| with
+frozen tolerances), STATISTICAL (frozen comparison rule).
+
+---
+
 # R2A2 v0.5.4 — Sigstore compat execution closure (v0.5 BANKED)
 
 ## External review of v0.5.3 (commit caad157)
